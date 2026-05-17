@@ -1,22 +1,30 @@
 import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
-import { fetchGoldPrice, getLastPrice, type GoldPrice } from "./goldPrice";
+import { fetchGoldPrice, type GoldPrice } from "./goldPrice";
 import {
-  addSubscriber,
+  setSubscriber,
   removeSubscriber,
-  isSubscriber,
-  getAllSubscribers,
+  getSubscriber,
+  getDueSubscribers,
+  markNotified,
   subscriberCount,
 } from "./subscribers";
 import { logger } from "../lib/logger";
 
 let bot: TelegramBot | null = null;
 
+const INTERVALS: Record<string, { label: string; minutes: number }> = {
+  "5":  { label: "Her 5 dakika",  minutes: 5  },
+  "15": { label: "Her 15 dakika", minutes: 15 },
+  "30": { label: "Her 30 dakika", minutes: 30 },
+  "60": { label: "Her 1 saat",    minutes: 60 },
+};
+
 function formatTR(n: number): string {
   return n.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function formatPrice(price: GoldPrice): string {
+function formatPrice(price: GoldPrice, intervalLabel?: string): string {
   const arrow = price.change > 0 ? "📈" : price.change < 0 ? "📉" : "➡️";
   const changeSign = price.change > 0 ? "+" : "";
   const time = price.timestamp.toLocaleTimeString("tr-TR", {
@@ -24,7 +32,6 @@ function formatPrice(price: GoldPrice): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-
   const hasSpread = Math.abs(price.alis - price.satis) > 0.01;
 
   return (
@@ -34,20 +41,37 @@ function formatPrice(price: GoldPrice): string {
         `📤 Satış: *${formatTR(price.satis)} ₺*\n`
       : `💰 Fiyat: *${formatTR(price.gramTL)} ₺*\n`) +
     `${arrow} Değişim: *${changeSign}${formatTR(price.change)} ₺* (${changeSign}${price.changePercent.toFixed(2)}%)\n` +
-    `🕐 ${time} — _${price.source}_`
+    `🕐 ${time}` +
+    (intervalLabel ? ` — _${intervalLabel}_` : ` — _${price.source}_`)
   );
 }
 
-async function broadcast(message: string): Promise<void> {
+function intervalKeyboard(): TelegramBot.InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: "⚡ 5 dakika",  callback_data: "interval_5"  },
+        { text: "🕐 15 dakika", callback_data: "interval_15" },
+      ],
+      [
+        { text: "🕧 30 dakika", callback_data: "interval_30" },
+        { text: "⏰ 1 saat",    callback_data: "interval_60" },
+      ],
+      [
+        { text: "❌ Bildirimleri Durdur", callback_data: "interval_stop" },
+      ],
+    ],
+  };
+}
+
+async function sendCurrentPrice(chatId: number): Promise<void> {
   if (!bot) return;
-  const subs = getAllSubscribers();
-  const results = await Promise.allSettled(
-    subs.map((chatId) =>
-      bot!.sendMessage(chatId, message, { parse_mode: "Markdown" })
-    )
-  );
-  const failed = results.filter((r) => r.status === "rejected").length;
-  logger.info({ total: subs.length, failed }, "Broadcast done");
+  try {
+    const price = await fetchGoldPrice();
+    await bot.sendMessage(chatId, formatPrice(price), { parse_mode: "Markdown" });
+  } catch {
+    logger.warn({ chatId }, "İlk fiyat gönderilemedi");
+  }
 }
 
 export function initBot(): void {
@@ -66,39 +90,74 @@ export function initBot(): void {
     await bot!.sendMessage(
       chatId,
       `Merhaba ${firstName}! 👋\n\n` +
-        `🥇 *Gram Altın Fiyat Botu*\n\n` +
-        `Bu bot size anlık gram altın fiyatlarını Türk Lirası (₺) cinsinden bildirir.\n\n` +
-        `📋 *Komutlar:*\n` +
-        `/abone — Her 5 dakikada fiyat bildirimi al\n` +
-        `/iptal — Bildirimleri durdur\n` +
-        `/fiyat — Anlık fiyatı gör\n` +
-        `/yardim — Bu mesajı göster`,
+      `🥇 *Gram Altın Fiyat Botu*\n\n` +
+      `Harem Altın'dan canlı gram altın fiyatlarını Türk Lirası cinsinden bildirir.\n\n` +
+      `📋 *Komutlar:*\n` +
+      `/abone — Otomatik bildirim ayarla\n` +
+      `/fiyat — Anlık fiyatı gör\n` +
+      `/durum — Abonelik durumunu gör\n` +
+      `/iptal — Bildirimleri durdur\n` +
+      `/yardim — Yardım`,
       { parse_mode: "Markdown" }
     );
   });
 
   bot.onText(/\/abone/, async (msg) => {
     const chatId = msg.chat.id;
-    const isNew = addSubscriber(chatId);
-    if (isNew) {
-      await bot!.sendMessage(
-        chatId,
-        `✅ *Abonelik başarılı!*\n\nHer 5 dakikada bir gram altın fiyatını alacaksınız.\n\nİptal etmek için /iptal yazın.`,
-        { parse_mode: "Markdown" }
-      );
-      try {
-        const price = await fetchGoldPrice();
-        await bot!.sendMessage(chatId, formatPrice(price), {
-          parse_mode: "Markdown",
-        });
-      } catch {
-        logger.warn("İlk fiyat gönderilemedi");
+    const sub = getSubscriber(chatId);
+    const currentInfo = sub
+      ? `\n\n⚙️ Mevcut ayarınız: *${INTERVALS[String(sub.intervalMinutes)]?.label ?? sub.intervalMinutes + " dakika"}*`
+      : "";
+
+    await bot!.sendMessage(
+      chatId,
+      `🔔 *Bildirim Sıklığını Seçin*${currentInfo}\n\nKaç dakikada bir gram altın fiyatı almak istiyorsunuz?`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: intervalKeyboard(),
       }
-    } else {
-      await bot!.sendMessage(
-        chatId,
-        `ℹ️ Zaten abonesiniz. Fiyatlar her 5 dakikada gönderilecek.\n\nİptal etmek için /iptal yazın.`
+    );
+  });
+
+  bot.on("callback_query", async (query) => {
+    if (!query.data || !query.message) return;
+    const chatId = query.message.chat.id;
+    const data = query.data;
+
+    if (data === "interval_stop") {
+      removeSubscriber(chatId);
+      await bot!.answerCallbackQuery(query.id, { text: "Bildirimler durduruldu." });
+      await bot!.editMessageText(
+        "❌ *Bildirimler durduruldu.*\n\nTekrar başlatmak için /abone yazın.",
+        {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          parse_mode: "Markdown",
+        }
       );
+      return;
+    }
+
+    if (data.startsWith("interval_")) {
+      const key = data.replace("interval_", "");
+      const interval = INTERVALS[key];
+      if (!interval) return;
+
+      const status = setSubscriber(chatId, interval.minutes);
+      await bot!.answerCallbackQuery(query.id, { text: `✅ ${interval.label} ayarlandı!` });
+
+      await bot!.editMessageText(
+        `✅ *Abonelik ${status === "new" ? "başlatıldı" : "güncellendi"}!*\n\n` +
+        `⏰ Sıklık: *${interval.label}*\n\n` +
+        `Şu an güncel fiyat gönderiliyor...`,
+        {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          parse_mode: "Markdown",
+        }
+      );
+
+      await sendCurrentPrice(chatId);
     }
   });
 
@@ -106,31 +165,53 @@ export function initBot(): void {
     const chatId = msg.chat.id;
     const removed = removeSubscriber(chatId);
     if (removed) {
-      await bot!.sendMessage(
-        chatId,
-        `❌ Aboneliğiniz iptal edildi.\n\nTekrar abone olmak için /abone yazın.`
-      );
+      await bot!.sendMessage(chatId, `❌ Bildirimler durduruldu.\n\nTekrar başlatmak için /abone yazın.`);
     } else {
-      await bot!.sendMessage(
-        chatId,
-        `ℹ️ Zaten abone değilsiniz. Abone olmak için /abone yazın.`
-      );
+      await bot!.sendMessage(chatId, `ℹ️ Zaten abone değilsiniz. Abone olmak için /abone yazın.`);
     }
   });
 
   bot.onText(/\/fiyat/, async (msg) => {
     const chatId = msg.chat.id;
+    const loadingMsg = await bot!.sendMessage(chatId, "⏳ Fiyat alınıyor...");
     try {
-      await bot!.sendMessage(chatId, "⏳ Fiyat alınıyor...");
       const price = await fetchGoldPrice();
-      await bot!.sendMessage(chatId, formatPrice(price), {
+      await bot!.editMessageText(formatPrice(price), {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
         parse_mode: "Markdown",
       });
     } catch (err) {
       logger.error({ err }, "Fiyat alınamadı");
+      await bot!.editMessageText("❌ Fiyat alınırken hata oluştu. Lütfen tekrar deneyin.", {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+      });
+    }
+  });
+
+  bot.onText(/\/durum/, async (msg) => {
+    const chatId = msg.chat.id;
+    const sub = getSubscriber(chatId);
+    if (sub) {
+      const label = INTERVALS[String(sub.intervalMinutes)]?.label ?? `${sub.intervalMinutes} dakika`;
+      const last = sub.lastNotified
+        ? sub.lastNotified.toLocaleTimeString("tr-TR", { timeZone: "Europe/Istanbul", hour: "2-digit", minute: "2-digit" })
+        : "Henüz gönderilmedi";
       await bot!.sendMessage(
         chatId,
-        "❌ Fiyat alınırken hata oluştu. Lütfen tekrar deneyin."
+        `📊 *Abonelik Durumunuz*\n\n` +
+        `✅ Durum: Aktif\n` +
+        `⏰ Sıklık: *${label}*\n` +
+        `📨 Son bildirim: ${last}\n\n` +
+        `Değiştirmek için /abone yazın.\nDudurmak için /iptal yazın.`,
+        { parse_mode: "Markdown" }
+      );
+    } else {
+      await bot!.sendMessage(
+        chatId,
+        `❌ *Aboneliğiniz yok.*\n\nBildirim almak için /abone yazın.`,
+        { parse_mode: "Markdown" }
       );
     }
   });
@@ -140,12 +221,14 @@ export function initBot(): void {
     await bot!.sendMessage(
       chatId,
       `🥇 *Gram Altın Fiyat Botu — Yardım*\n\n` +
-        `📋 *Komutlar:*\n` +
-        `/abone — Her 5 dakikada fiyat bildirimi al\n` +
-        `/iptal — Bildirimleri durdur\n` +
-        `/fiyat — Anlık fiyatı gör\n` +
-        `/yardim — Bu mesajı göster\n\n` +
-        `👥 Toplam abone: ${subscriberCount()}`,
+      `📋 *Komutlar:*\n` +
+      `/abone — Bildirim sıklığını seç (butonlu menü)\n` +
+      `/fiyat — Anlık gram altın fiyatını gör\n` +
+      `/durum — Abonelik durumunu gör\n` +
+      `/iptal — Bildirimleri durdur\n` +
+      `/yardim — Bu yardım mesajını göster\n\n` +
+      `👥 Toplam abone: *${subscriberCount()}*\n` +
+      `📡 Kaynak: Harem Altın (altinkuru.net)`,
       { parse_mode: "Markdown" }
     );
   });
@@ -154,19 +237,34 @@ export function initBot(): void {
     logger.error({ err: err.message }, "Telegram polling hatası");
   });
 
-  cron.schedule("*/5 * * * *", async () => {
-    if (subscriberCount() === 0) return;
-    logger.info("Cron: fiyat güncelleniyor ve gönderiliyor...");
+  // Dakikada bir çalışır, her kullanıcının kendi intervaline göre bildirim gönderir
+  cron.schedule("* * * * *", async () => {
+    const due = getDueSubscribers();
+    if (due.length === 0) return;
+
+    logger.info({ count: due.length }, "Cron: bildirim gönderilecek aboneler");
+
     try {
       const price = await fetchGoldPrice();
-      const message = formatPrice(price);
-      await broadcast(message);
+
+      await Promise.allSettled(
+        due.map(async (sub) => {
+          const label = INTERVALS[String(sub.intervalMinutes)]?.label;
+          const message = formatPrice(price, label);
+          try {
+            await bot!.sendMessage(sub.chatId, message, { parse_mode: "Markdown" });
+            markNotified(sub.chatId);
+          } catch (err) {
+            logger.warn({ chatId: sub.chatId, err: (err as Error).message }, "Mesaj gönderilemedi");
+          }
+        })
+      );
     } catch (err) {
       logger.error({ err }, "Cron: fiyat alınamadı");
     }
   });
 
-  logger.info("Cron job: her 5 dakikada bildirim aktif");
+  logger.info("Cron job: dakikada bir kontrol aktif");
 }
 
 export function getBot(): TelegramBot | null {
