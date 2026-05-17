@@ -24,16 +24,42 @@ function formatTR(n: number): string {
   return n.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function formatPrice(price: GoldPrice, intervalLabel?: string): string {
-  const arrow = price.change > 0 ? "📈" : price.change < 0 ? "📉" : "➡️";
-  const changeSign = price.change > 0 ? "+" : "";
-  const time = price.timestamp.toLocaleTimeString("tr-TR", {
+function formatTime(timestamp: Date): string {
+  return timestamp.toLocaleTimeString("tr-TR", {
     timeZone: "Europe/Istanbul",
     hour: "2-digit",
     minute: "2-digit",
   });
-  const hasSpread = Math.abs(price.alis - price.satis) > 0.01;
+}
 
+function formatPrice(price: GoldPrice, intervalLabel?: string): string {
+  const arrow = price.change > 0 ? "📈" : price.change < 0 ? "📉" : "➡️";
+  const changeSign = price.change > 0 ? "+" : "";
+  const time = formatTime(price.timestamp);
+  const hasGramSpread = Math.abs(price.alis - price.satis) > 0.01;
+  const hasOnsSpread = Math.abs(price.onsAlis - price.onsSatis) > 0.01;
+
+  return (
+    `🥇 *Gram Altın*\n` +
+    (hasGramSpread
+      ? `📥 Alış: *${formatTR(price.alis)} ₺*\n` +
+        `📤 Satış: *${formatTR(price.satis)} ₺*\n`
+      : `💰 Fiyat: *${formatTR(price.gramTL)} ₺*\n`) +
+    `${arrow} Değişim: *${changeSign}${formatTR(price.change)} ₺* (${changeSign}${price.changePercent.toFixed(2)}%)\n\n` +
+    `🏅 *Ons Altın*\n` +
+    (hasOnsSpread
+      ? `📥 Alış: *${formatTR(price.onsAlis)} ₺*\n` +
+        `📤 Satış: *${formatTR(price.onsSatis)} ₺*\n`
+      : `💰 Fiyat: *${formatTR(price.onsTL)} ₺*\n`) +
+    `\n🕐 ${time}` +
+    (intervalLabel ? ` — _${intervalLabel}_` : ` — _${price.source}_`)
+  );
+}
+
+function formatGramOnly(price: GoldPrice): string {
+  const arrow = price.change > 0 ? "📈" : price.change < 0 ? "📉" : "➡️";
+  const changeSign = price.change > 0 ? "+" : "";
+  const hasSpread = Math.abs(price.alis - price.satis) > 0.01;
   return (
     `🥇 *Gram Altın Fiyatı*\n\n` +
     (hasSpread
@@ -41,8 +67,19 @@ function formatPrice(price: GoldPrice, intervalLabel?: string): string {
         `📤 Satış: *${formatTR(price.satis)} ₺*\n`
       : `💰 Fiyat: *${formatTR(price.gramTL)} ₺*\n`) +
     `${arrow} Değişim: *${changeSign}${formatTR(price.change)} ₺* (${changeSign}${price.changePercent.toFixed(2)}%)\n` +
-    `🕐 ${time}` +
-    (intervalLabel ? ` — _${intervalLabel}_` : ` — _${price.source}_`)
+    `🕐 ${formatTime(price.timestamp)} — _${price.source}_`
+  );
+}
+
+function formatOnsOnly(price: GoldPrice): string {
+  const hasSpread = Math.abs(price.onsAlis - price.onsSatis) > 0.01;
+  return (
+    `🏅 *Ons Altın Fiyatı*\n\n` +
+    (hasSpread
+      ? `📥 Alış: *${formatTR(price.onsAlis)} ₺*\n` +
+        `📤 Satış: *${formatTR(price.onsSatis)} ₺*\n`
+      : `💰 Fiyat: *${formatTR(price.onsTL)} ₺*\n`) +
+    `🕐 ${formatTime(price.timestamp)} — _${price.source}_`
   );
 }
 
@@ -90,11 +127,13 @@ export function initBot(): void {
     await bot!.sendMessage(
       chatId,
       `Merhaba ${firstName}! 👋\n\n` +
-      `🥇 *Gram Altın Fiyat Botu*\n\n` +
-      `Harem Altın'dan canlı gram altın fiyatlarını Türk Lirası cinsinden bildirir.\n\n` +
+      `🥇 *Altın Fiyat Botu*\n\n` +
+      `Harem Altın'dan canlı gram ve ons altın fiyatlarını Türk Lirası cinsinden bildirir.\n\n` +
       `📋 *Komutlar:*\n` +
+      `/fiyat — Gram + ons altın fiyatı\n` +
+      `/gram — Sadece gram altın fiyatı\n` +
+      `/ons — Sadece ons altın fiyatı\n` +
       `/abone — Otomatik bildirim ayarla\n` +
-      `/fiyat — Anlık fiyatı gör\n` +
       `/durum — Abonelik durumunu gör\n` +
       `/iptal — Bildirimleri durdur\n` +
       `/yardim — Yardım`,
@@ -190,6 +229,44 @@ export function initBot(): void {
     }
   });
 
+  bot.onText(/\/gram/, async (msg) => {
+    const chatId = msg.chat.id;
+    const loadingMsg = await bot!.sendMessage(chatId, "⏳ Fiyat alınıyor...");
+    try {
+      const price = await fetchGoldPrice();
+      await bot!.editMessageText(formatGramOnly(price), {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        parse_mode: "Markdown",
+      });
+    } catch (err) {
+      logger.error({ err }, "Fiyat alınamadı");
+      await bot!.editMessageText("❌ Fiyat alınırken hata oluştu. Lütfen tekrar deneyin.", {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+      });
+    }
+  });
+
+  bot.onText(/\/ons/, async (msg) => {
+    const chatId = msg.chat.id;
+    const loadingMsg = await bot!.sendMessage(chatId, "⏳ Fiyat alınıyor...");
+    try {
+      const price = await fetchGoldPrice();
+      await bot!.editMessageText(formatOnsOnly(price), {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        parse_mode: "Markdown",
+      });
+    } catch (err) {
+      logger.error({ err }, "Fiyat alınamadı");
+      await bot!.editMessageText("❌ Fiyat alınırken hata oluştu. Lütfen tekrar deneyin.", {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+      });
+    }
+  });
+
   bot.onText(/\/durum/, async (msg) => {
     const chatId = msg.chat.id;
     const sub = getSubscriber(chatId);
@@ -220,10 +297,12 @@ export function initBot(): void {
     const chatId = msg.chat.id;
     await bot!.sendMessage(
       chatId,
-      `🥇 *Gram Altın Fiyat Botu — Yardım*\n\n` +
+      `🥇 *Altın Fiyat Botu — Yardım*\n\n` +
       `📋 *Komutlar:*\n` +
+      `/fiyat — Gram + ons altın fiyatı\n` +
+      `/gram — Sadece gram altın fiyatı\n` +
+      `/ons — Sadece ons altın fiyatı\n` +
       `/abone — Bildirim sıklığını seç (butonlu menü)\n` +
-      `/fiyat — Anlık gram altın fiyatını gör\n` +
       `/durum — Abonelik durumunu gör\n` +
       `/iptal — Bildirimleri durdur\n` +
       `/yardim — Bu yardım mesajını göster\n\n` +
