@@ -12,6 +12,10 @@ import { logger } from "../lib/logger";
 
 let bot: TelegramBot | null = null;
 
+function formatTR(n: number): string {
+  return n.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function formatPrice(price: GoldPrice): string {
   const arrow = price.change > 0 ? "📈" : price.change < 0 ? "📉" : "➡️";
   const changeSign = price.change > 0 ? "+" : "";
@@ -21,11 +25,16 @@ function formatPrice(price: GoldPrice): string {
     minute: "2-digit",
   });
 
+  const hasSpread = Math.abs(price.alis - price.satis) > 0.01;
+
   return (
     `🥇 *Gram Altın Fiyatı*\n\n` +
-    `💰 Fiyat: *${price.gramTL.toFixed(2)} ₺*\n` +
-    `${arrow} Değişim: *${changeSign}${price.change.toFixed(2)} ₺* (${changeSign}${price.changePercent.toFixed(2)}%)\n` +
-    `🕐 Güncelleme: ${time}`
+    (hasSpread
+      ? `📥 Alış: *${formatTR(price.alis)} ₺*\n` +
+        `📤 Satış: *${formatTR(price.satis)} ₺*\n`
+      : `💰 Fiyat: *${formatTR(price.gramTL)} ₺*\n`) +
+    `${arrow} Değişim: *${changeSign}${formatTR(price.change)} ₺* (${changeSign}${price.changePercent.toFixed(2)}%)\n` +
+    `🕐 ${time} — _${price.source}_`
   );
 }
 
