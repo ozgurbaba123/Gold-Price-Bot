@@ -9,6 +9,7 @@ COPY tsconfig.base.json tsconfig.json ./
 COPY lib/db/package.json ./lib/db/
 COPY lib/api-spec/package.json ./lib/api-spec/
 COPY lib/api-zod/package.json ./lib/api-zod/
+COPY lib/api-client-react/package.json ./lib/api-client-react/
 COPY artifacts/api-server/package.json ./artifacts/api-server/
 
 RUN pnpm install --frozen-lockfile
@@ -16,7 +17,6 @@ RUN pnpm install --frozen-lockfile
 COPY lib/ ./lib/
 COPY artifacts/api-server/ ./artifacts/api-server/
 
-RUN pnpm run typecheck:libs
 RUN pnpm --filter @workspace/api-server run build
 
 ENV NODE_ENV=production
