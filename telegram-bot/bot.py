@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import requests
 from datetime import datetime
@@ -14,11 +15,34 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_IDS_RAW = os.getenv("CHAT_IDS", "")
-CHAT_IDS = [cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()]
 INTERVAL_MINUTES = int(os.getenv("INTERVAL_MINUTES", "30"))
 TIMEZONE = os.getenv("TIMEZONE", "Europe/Istanbul")
+SUBSCRIBERS_FILE = "subscribers.json"
 
 TZ = pytz.timezone(TIMEZONE)
+
+subscribers: set[str] = set(
+    cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
+)
+
+
+def load_subscribers():
+    global subscribers
+    if os.path.exists(SUBSCRIBERS_FILE):
+        try:
+            with open(SUBSCRIBERS_FILE) as f:
+                data = json.load(f)
+                subscribers.update(str(cid) for cid in data)
+        except Exception:
+            pass
+
+
+def save_subscribers():
+    try:
+        with open(SUBSCRIBERS_FILE, "w") as f:
+            json.dump(list(subscribers), f)
+    except Exception as e:
+        logger.error("Abone kaydedilemedi: %s", e)
 
 
 def get_prices():
@@ -39,15 +63,11 @@ def get_prices():
     troy_to_gram = 31.1035
     gram_altin_try = (xau_usd * usd_try) / troy_to_gram
 
-    ceyrek = gram_altin_try * 1.75
-    yarim = gram_altin_try * 3.5
-    tam = gram_altin_try * 7.0
-
     return {
         "gram_altin": gram_altin_try,
-        "ceyrek": ceyrek,
-        "yarim": yarim,
-        "tam": tam,
+        "ceyrek": gram_altin_try * 1.75,
+        "yarim": gram_altin_try * 3.5,
+        "tam": gram_altin_try * 7.0,
         "usd_try": usd_try,
         "eur_try": eur_try,
         "usd_eur": usd_eur,
@@ -74,14 +94,21 @@ def format_message(prices: dict) -> str:
 
 
 async def send_prices_to_all(context: ContextTypes.DEFAULT_TYPE):
+    if not subscribers:
+        return
     try:
         prices = get_prices()
         msg = format_message(prices)
-        for chat_id in CHAT_IDS:
-            await context.bot.send_message(
-                chat_id=chat_id, text=msg, parse_mode="HTML"
-            )
-        logger.info("Fiyatlar gönderildi: %d sohbet", len(CHAT_IDS))
+        failed = set()
+        for chat_id in list(subscribers):
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id, text=msg, parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning("Gönderilemedi %s: %s", chat_id, e)
+                failed.add(chat_id)
+        logger.info("Fiyatlar gönderildi: %d sohbet", len(subscribers) - len(failed))
     except Exception as e:
         logger.error("Fiyat gönderme hatası: %s", e)
 
@@ -90,51 +117,63 @@ async def fiyatlar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Fiyatlar alınıyor...")
     try:
         prices = get_prices()
-        msg = format_message(prices)
-        await update.message.reply_text(msg, parse_mode="HTML")
+        await update.message.reply_text(format_message(prices), parse_mode="HTML")
     except Exception as e:
         logger.error("Komut hatası: %s", e)
         await update.message.reply_text("❌ Fiyatlar alınamadı, lütfen tekrar deneyin.")
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+    chat_id = str(update.effective_chat.id)
+    if chat_id not in subscribers:
+        subscribers.add(chat_id)
+        save_subscribers()
+        status = f"✅ Otomatik fiyat güncellemelerine abone oldunuz!\nHer <b>{INTERVAL_MINUTES} dakikada</b> bir fiyatlar gönderilecek."
+    else:
+        status = f"✅ Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat alıyorsunuz."
+
     await update.message.reply_text(
-        f"👋 Merhaba! Altın ve döviz fiyatları botuna hoş geldiniz.\n\n"
-        f"📌 Chat ID'niz: <code>{chat_id}</code>\n\n"
-        f"Komutlar:\n"
+        f"👋 <b>Altın & Döviz Fiyatları Botuna Hoş Geldiniz!</b>\n\n"
+        f"{status}\n\n"
+        f"<b>Komutlar:</b>\n"
         f"/fiyatlar — Anlık fiyatları göster\n"
-        f"/start — Bu mesajı göster\n\n"
-        f"💡 Otomatik fiyat almak için Chat ID'nizi yöneticiye bildirin.",
+        f"/dur — Otomatik güncellemeleri durdur\n"
+        f"/start — Tekrar abone ol",
         parse_mode="HTML",
     )
 
 
+async def dur_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    if chat_id in subscribers:
+        subscribers.discard(chat_id)
+        save_subscribers()
+        await update.message.reply_text(
+            "🔕 Otomatik güncellemeler durduruldu.\n"
+            "Tekrar başlatmak için /start yazın."
+        )
+    else:
+        await update.message.reply_text(
+            "Zaten abone değilsiniz. /start ile abone olabilirsiniz."
+        )
+
+
 def main():
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN environment variable eksik!")
+    load_subscribers()
 
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("fiyatlar", fiyatlar_command))
+    app.add_handler(CommandHandler("dur", dur_command))
 
-    if CHAT_IDS:
-        job_queue = app.job_queue
-        job_queue.run_repeating(
-            send_prices_to_all,
-            interval=INTERVAL_MINUTES * 60,
-            first=10,
-        )
-        logger.info(
-            "Otomatik gönderim aktif: her %d dakikada bir, %d sohbet",
-            INTERVAL_MINUTES,
-            len(CHAT_IDS),
-        )
-    else:
-        logger.warning("CHAT_IDS tanımlanmamış — otomatik gönderim devre dışı.")
-
-    logger.info("Bot başlatılıyor...")
+    job_queue = app.job_queue
+    job_queue.run_repeating(
+        send_prices_to_all,
+        interval=INTERVAL_MINUTES * 60,
+        first=10,
+    )
+    logger.info("Bot başlatıldı — her %d dakikada bir fiyat gönderiliyor", INTERVAL_MINUTES)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
