@@ -48,6 +48,8 @@ def parse_price(val: str) -> float:
     return float(val.replace(".", "").replace(",", ".").replace("$", "").strip())
 
 
+VERSIYON = "v4.0"
+
 def get_prices_haremaltin() -> dict:
     resp = requests.post(
         "https://www.haremaltin.com/dashboard/ajax/getData",
@@ -63,8 +65,8 @@ def get_prices_haremaltin() -> dict:
         timeout=10,
     )
     resp.raise_for_status()
-    data = resp.json()
-    a = data["data"]
+    raw = resp.json()
+    a = raw["data"]
 
     def item(key):
         d = a[key]
@@ -74,6 +76,21 @@ def get_prices_haremaltin() -> dict:
         pct = (deg / alis * 100) if alis else 0
         return {"alis": alis, "satis": satis, "degisim": deg, "pct": pct}
 
+    def doviz(a_, s_):
+        deg = s_ - a_
+        return {"alis": a_, "satis": s_, "degisim": deg, "pct": (deg / a_ * 100) if a_ else 0}
+
+    gram = item("ALTIN")
+
+    try:
+        ons = item("ONS")
+    except Exception:
+        gram_alis = gram["alis"]
+        gram_satis = gram["satis"]
+        ons_alis = gram_alis * 31.1035
+        ons_satis = gram_satis * 31.1035
+        ons = doviz(ons_alis, ons_satis)
+
     usd_try_a = float(a["USDTRY"]["alis"])
     usd_try_s = float(a["USDTRY"]["satis"])
     eur_try_a = float(a["EURTRY"]["alis"])
@@ -81,13 +98,9 @@ def get_prices_haremaltin() -> dict:
     usd_eur_a = usd_try_a / eur_try_a
     usd_eur_s = usd_try_s / eur_try_s
 
-    def doviz(a_, s_):
-        deg = s_ - a_
-        return {"alis": a_, "satis": s_, "degisim": deg, "pct": (deg / a_ * 100) if a_ else 0}
-
     return {
-        "gram":    item("ALTIN"),
-        "ons":     item("ONS"),
+        "gram":    gram,
+        "ons":     ons,
         "usd_try": doviz(usd_try_a, usd_try_s),
         "eur_try": doviz(eur_try_a, eur_try_s),
         "usd_eur": doviz(usd_eur_a, usd_eur_s),
@@ -257,6 +270,21 @@ async def dur_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        prices = get_prices()
+        keys = list(prices.keys())
+        kaynak = prices.get("kaynak", "?")
+        await update.message.reply_text(
+            f"🔧 <b>Debug — {VERSIYON}</b>\n"
+            f"Kaynak: {kaynak}\n"
+            f"Anahtarlar: {keys}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Hata: {e}")
+
+
 async def metin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     metin = (update.message.text or "").strip().lower()
     if metin == "abone":
@@ -271,6 +299,7 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("fiyatlar", fiyatlar_command))
     app.add_handler(CommandHandler("dur", dur_command))
+    app.add_handler(CommandHandler("debug", debug_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, metin_handler))
 
     job_queue = app.job_queue
