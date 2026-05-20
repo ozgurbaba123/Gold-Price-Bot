@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 import pytz
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -27,7 +27,6 @@ subscribers: set[str] = set(
 
 
 def load_subscribers():
-    global subscribers
     if os.path.exists(SUBSCRIBERS_FILE):
         try:
             with open(SUBSCRIBERS_FILE) as f:
@@ -45,32 +44,34 @@ def save_subscribers():
         logger.error("Abone kaydedilemedi: %s", e)
 
 
-def get_prices():
-    currency = requests.get(
-        "https://open.er-api.com/v6/latest/USD", timeout=10
-    ).json()
-    usd_try = currency["rates"]["TRY"]
-    eur_try = currency["rates"]["TRY"] / currency["rates"]["EUR"]
-    usd_eur = 1 / currency["rates"]["EUR"]
+def parse_price(val: str) -> float:
+    return float(val.replace(".", "").replace(",", ".").replace("$", "").strip())
 
-    gold = requests.get(
-        "https://query1.finance.yahoo.com/v8/finance/chart/GC=F",
+
+def get_prices():
+    data = requests.get(
+        "https://finans.truncgil.com/today.json",
         headers={"User-Agent": "Mozilla/5.0"},
         timeout=10,
     ).json()
-    xau_usd = gold["chart"]["result"][0]["meta"]["regularMarketPrice"]
 
-    troy_to_gram = 31.1035
-    gram_altin_try = (xau_usd * usd_try) / troy_to_gram
+    gram = parse_price(data["gram-altin"]["Satış"])
+    ceyrek = parse_price(data["ceyrek-altin"]["Satış"])
+    yarim = parse_price(data["yarim-altin"]["Satış"])
+    tam = parse_price(data["tam-altin"]["Satış"])
+    usd_try = parse_price(data["USD"]["Satış"])
+    eur_try = parse_price(data["EUR"]["Satış"])
+    usd_eur = usd_try / eur_try
 
     return {
-        "gram_altin": gram_altin_try,
-        "ceyrek": gram_altin_try * 1.75,
-        "yarim": gram_altin_try * 3.5,
-        "tam": gram_altin_try * 7.0,
+        "gram_altin": gram,
+        "ceyrek": ceyrek,
+        "yarim": yarim,
+        "tam": tam,
         "usd_try": usd_try,
         "eur_try": eur_try,
         "usd_eur": usd_eur,
+        "guncelleme": data.get("Update_Date", ""),
     }
 
 
@@ -99,18 +100,40 @@ async def send_prices_to_all(context: ContextTypes.DEFAULT_TYPE):
     try:
         prices = get_prices()
         msg = format_message(prices)
-        failed = set()
         for chat_id in list(subscribers):
             try:
-                await context.bot.send_message(
-                    chat_id=chat_id, text=msg, parse_mode="HTML"
-                )
+                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
             except Exception as e:
                 logger.warning("Gönderilemedi %s: %s", chat_id, e)
-                failed.add(chat_id)
-        logger.info("Fiyatlar gönderildi: %d sohbet", len(subscribers) - len(failed))
+        logger.info("Fiyatlar gönderildi: %d sohbet", len(subscribers))
     except Exception as e:
         logger.error("Fiyat gönderme hatası: %s", e)
+
+
+async def subscribe_and_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = str(update.effective_chat.id)
+    yeni = chat_id not in subscribers
+    if yeni:
+        subscribers.add(chat_id)
+        save_subscribers()
+
+    await update.message.reply_text("⏳ Fiyatlar alınıyor...")
+    try:
+        prices = get_prices()
+        msg = format_message(prices)
+
+        if yeni:
+            bilgi = (
+                f"✅ <b>Abone oldunuz!</b> Her <b>{INTERVAL_MINUTES} dakikada</b> bir otomatik fiyat alacaksınız.\n"
+                f"Durdurmak için /dur yazın.\n\n"
+            )
+        else:
+            bilgi = f"✅ Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat alıyorsunuz.\n\n"
+
+        await update.message.reply_text(bilgi + msg, parse_mode="HTML")
+    except Exception as e:
+        logger.error("Abone fiyat hatası: %s", e)
+        await update.message.reply_text("❌ Fiyatlar alınamadı, lütfen tekrar deneyin.")
 
 
 async def fiyatlar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -124,21 +147,13 @@ async def fiyatlar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = str(update.effective_chat.id)
-    if chat_id not in subscribers:
-        subscribers.add(chat_id)
-        save_subscribers()
-        status = f"✅ Otomatik fiyat güncellemelerine abone oldunuz!\nHer <b>{INTERVAL_MINUTES} dakikada</b> bir fiyatlar gönderilecek."
-    else:
-        status = f"✅ Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat alıyorsunuz."
-
     await update.message.reply_text(
         f"👋 <b>Altın & Döviz Fiyatları Botuna Hoş Geldiniz!</b>\n\n"
-        f"{status}\n\n"
         f"<b>Komutlar:</b>\n"
-        f"/fiyatlar — Anlık fiyatları göster\n"
-        f"/dur — Otomatik güncellemeleri durdur\n"
-        f"/start — Tekrar abone ol",
+        f"• <b>abone</b> — Abone ol ve anlık fiyatları gör\n"
+        f"• /fiyatlar — Anlık fiyatları göster\n"
+        f"• /dur — Otomatik güncellemeleri durdur\n"
+        f"• /start — Bu mesajı göster",
         parse_mode="HTML",
     )
 
@@ -150,12 +165,20 @@ async def dur_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_subscribers()
         await update.message.reply_text(
             "🔕 Otomatik güncellemeler durduruldu.\n"
-            "Tekrar başlatmak için /start yazın."
+            "Tekrar başlatmak için <b>abone</b> yazın.",
+            parse_mode="HTML",
         )
     else:
         await update.message.reply_text(
-            "Zaten abone değilsiniz. /start ile abone olabilirsiniz."
+            "Zaten abone değilsiniz. <b>abone</b> yazarak abone olabilirsiniz.",
+            parse_mode="HTML",
         )
+
+
+async def metin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    metin = (update.message.text or "").strip().lower()
+    if metin == "abone":
+        await subscribe_and_show(update, context)
 
 
 def main():
@@ -166,6 +189,7 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("fiyatlar", fiyatlar_command))
     app.add_handler(CommandHandler("dur", dur_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, metin_handler))
 
     job_queue = app.job_queue
     job_queue.run_repeating(
