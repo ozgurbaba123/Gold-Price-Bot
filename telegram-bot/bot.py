@@ -201,7 +201,6 @@ async def subscribe_and_show(update: Update, context: ContextTypes.DEFAULT_TYPE)
         subscribers.add(chat_id)
         save_subscribers()
 
-    await update.message.reply_text("⏳ Fiyatlar alınıyor...")
     try:
         prices = get_prices()
         msg = format_message(prices)
@@ -221,7 +220,6 @@ async def subscribe_and_show(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def fiyatlar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Fiyatlar alınıyor...")
     try:
         prices = get_prices()
         await update.message.reply_text(format_message(prices), parse_mode="HTML")
