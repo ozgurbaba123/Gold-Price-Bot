@@ -48,7 +48,45 @@ def parse_price(val: str) -> float:
     return float(val.replace(".", "").replace(",", ".").replace("$", "").strip())
 
 
-def get_prices():
+def get_prices_haremaltin() -> dict:
+    resp = requests.post(
+        "https://www.haremaltin.com/dashboard/ajax/getData",
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Referer": "https://www.haremaltin.com/altin-fiyatlari",
+            "Origin": "https://www.haremaltin.com",
+        },
+        data={"dil_id": "0"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    altin = data["data"]
+
+    gram = float(altin["ALTIN"]["satis"])
+    ceyrek = float(altin["CEYREK_YENI"]["satis"])
+    yarim = float(altin["YARIM_YENI"]["satis"])
+    tam = float(altin["ATA_YENI"]["satis"])
+    usd_try = float(altin["USDTRY"]["satis"])
+    eur_try = float(altin["EURTRY"]["satis"])
+    usd_eur = usd_try / eur_try
+
+    return {
+        "gram_altin": gram,
+        "ceyrek": ceyrek,
+        "yarim": yarim,
+        "tam": tam,
+        "usd_try": usd_try,
+        "eur_try": eur_try,
+        "usd_eur": usd_eur,
+        "kaynak": "haremaltin.com",
+    }
+
+
+def get_prices_yedek() -> dict:
     data = requests.get(
         "https://finans.truncgil.com/today.json",
         headers={"User-Agent": "Mozilla/5.0"},
@@ -71,8 +109,18 @@ def get_prices():
         "usd_try": usd_try,
         "eur_try": eur_try,
         "usd_eur": usd_eur,
-        "guncelleme": data.get("Update_Date", ""),
+        "kaynak": "yedek",
     }
+
+
+def get_prices() -> dict:
+    try:
+        prices = get_prices_haremaltin()
+        logger.info("Fiyatlar haremaltin.com'dan alındı")
+        return prices
+    except Exception as e:
+        logger.warning("Haremaltin erişilemedi (%s), yedek kaynak kullanılıyor", e)
+        return get_prices_yedek()
 
 
 def format_message(prices: dict) -> str:
