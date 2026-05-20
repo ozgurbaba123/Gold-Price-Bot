@@ -1,6 +1,6 @@
 import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
-import { fetchGoldPrice, type GoldPrice } from "./goldPrice";
+import { fetchGoldPrice, fetchForexRates, type GoldPrice, type ForexRate } from "./goldPrice.js";
 import {
   setSubscriber,
   removeSubscriber,
@@ -8,8 +8,8 @@ import {
   getDueSubscribers,
   markNotified,
   subscriberCount,
-} from "./subscribers";
-import { logger } from "../lib/logger";
+} from "./subscribers.js";
+import { logger } from "../lib/logger.js";
 
 let bot: TelegramBot | null = null;
 
@@ -20,8 +20,8 @@ const INTERVALS: Record<string, { label: string; minutes: number }> = {
   "60": { label: "Her 1 saat",    minutes: 60 },
 };
 
-function formatTR(n: number): string {
-  return n.toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function formatTR(n: number, decimals = 2): string {
+  return n.toLocaleString("tr-TR", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
 function formatTime(timestamp: Date): string {
@@ -83,6 +83,49 @@ function formatOnsOnly(price: GoldPrice): string {
   );
 }
 
+function formatForex(rates: ForexRate[]): string {
+  const pairEmoji: Record<string, string> = {
+    "USD/TRY": "🇺🇸",
+    "EUR/TRY": "🇪🇺",
+    "EUR/USD": "💶",
+  };
+  const pairOrder = ["USD/TRY", "EUR/TRY", "EUR/USD"];
+  const rateMap = new Map(rates.map((r) => [r.pair, r]));
+
+  const lines = pairOrder
+    .filter((p) => rateMap.has(p))
+    .map((p) => {
+      const r = rateMap.get(p)!;
+      const emoji = pairEmoji[p] ?? "💱";
+      const decimals = p === "EUR/USD" ? 4 : 2;
+      return (
+        `${emoji} *${p}*\n` +
+        `📥 Alış: *${formatTR(r.alis, decimals)}*\n` +
+        `📤 Satış: *${formatTR(r.satis, decimals)}*`
+      );
+    });
+
+  const source = rates[0]?.source ?? "—";
+  const time = formatTime(rates[0]?.timestamp ?? new Date());
+  return lines.join("\n\n") + `\n\n🕐 ${time} — _${source}_`;
+}
+
+function formatSingleForex(rate: ForexRate): string {
+  const pairEmoji: Record<string, string> = {
+    "USD/TRY": "🇺🇸",
+    "EUR/TRY": "🇪🇺",
+    "EUR/USD": "💶",
+  };
+  const emoji = pairEmoji[rate.pair] ?? "💱";
+  const decimals = rate.pair === "EUR/USD" ? 4 : 2;
+  return (
+    `${emoji} *${rate.pair} Kuru*\n\n` +
+    `📥 Alış: *${formatTR(rate.alis, decimals)}*\n` +
+    `📤 Satış: *${formatTR(rate.satis, decimals)}*\n` +
+    `🕐 ${formatTime(rate.timestamp)} — _${rate.source}_`
+  );
+}
+
 function intervalKeyboard(): TelegramBot.InlineKeyboardMarkup {
   return {
     inline_keyboard: [
@@ -127,12 +170,18 @@ export function initBot(): void {
     await bot!.sendMessage(
       chatId,
       `Merhaba ${firstName}! 👋\n\n` +
-      `🥇 *Altın Fiyat Botu*\n\n` +
-      `Harem Altın'dan canlı gram ve ons altın fiyatlarını Türk Lirası cinsinden bildirir.\n\n` +
-      `📋 *Komutlar:*\n` +
+      `🥇 *Altın & Döviz Fiyat Botu*\n\n` +
+      `Canlı altın ve döviz kuru verilerini Türk Lirası cinsinden bildirir.\n\n` +
+      `📋 *Altın Komutları:*\n` +
       `/fiyat — Gram + ons altın fiyatı\n` +
       `/gram — Sadece gram altın fiyatı\n` +
-      `/ons — Sadece ons altın fiyatı\n` +
+      `/ons — Sadece ons altın fiyatı\n\n` +
+      `💱 *Döviz Komutları:*\n` +
+      `/doviz — EUR/USD, EUR/TRY, USD/TRY kurları\n` +
+      `/usdtry — Dolar/TL kuru\n` +
+      `/eurtry — Euro/TL kuru\n` +
+      `/eurusd — Euro/Dolar kuru\n\n` +
+      `🔔 *Bildirim Komutları:*\n` +
       `/abone — Otomatik bildirim ayarla\n` +
       `/durum — Abonelik durumunu gör\n` +
       `/iptal — Bildirimleri durdur\n` +
@@ -267,6 +316,89 @@ export function initBot(): void {
     }
   });
 
+  // Döviz komutları
+  bot.onText(/\/doviz/, async (msg) => {
+    const chatId = msg.chat.id;
+    const loadingMsg = await bot!.sendMessage(chatId, "⏳ Kurlar alınıyor...");
+    try {
+      const rates = await fetchForexRates();
+      await bot!.editMessageText(formatForex(rates), {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        parse_mode: "Markdown",
+      });
+    } catch (err) {
+      logger.error({ err }, "Döviz kuru alınamadı");
+      await bot!.editMessageText("❌ Döviz kuru alınırken hata oluştu. Lütfen tekrar deneyin.", {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+      });
+    }
+  });
+
+  bot.onText(/\/usdtry/, async (msg) => {
+    const chatId = msg.chat.id;
+    const loadingMsg = await bot!.sendMessage(chatId, "⏳ Kur alınıyor...");
+    try {
+      const rates = await fetchForexRates();
+      const rate = rates.find((r) => r.pair === "USD/TRY");
+      if (!rate) throw new Error("USD/TRY bulunamadı");
+      await bot!.editMessageText(formatSingleForex(rate), {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        parse_mode: "Markdown",
+      });
+    } catch (err) {
+      logger.error({ err }, "USD/TRY alınamadı");
+      await bot!.editMessageText("❌ USD/TRY kuru alınırken hata oluştu.", {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+      });
+    }
+  });
+
+  bot.onText(/\/eurtry/, async (msg) => {
+    const chatId = msg.chat.id;
+    const loadingMsg = await bot!.sendMessage(chatId, "⏳ Kur alınıyor...");
+    try {
+      const rates = await fetchForexRates();
+      const rate = rates.find((r) => r.pair === "EUR/TRY");
+      if (!rate) throw new Error("EUR/TRY bulunamadı");
+      await bot!.editMessageText(formatSingleForex(rate), {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        parse_mode: "Markdown",
+      });
+    } catch (err) {
+      logger.error({ err }, "EUR/TRY alınamadı");
+      await bot!.editMessageText("❌ EUR/TRY kuru alınırken hata oluştu.", {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+      });
+    }
+  });
+
+  bot.onText(/\/eurusd/, async (msg) => {
+    const chatId = msg.chat.id;
+    const loadingMsg = await bot!.sendMessage(chatId, "⏳ Kur alınıyor...");
+    try {
+      const rates = await fetchForexRates();
+      const rate = rates.find((r) => r.pair === "EUR/USD");
+      if (!rate) throw new Error("EUR/USD bulunamadı");
+      await bot!.editMessageText(formatSingleForex(rate), {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+        parse_mode: "Markdown",
+      });
+    } catch (err) {
+      logger.error({ err }, "EUR/USD alınamadı");
+      await bot!.editMessageText("❌ EUR/USD kuru alınırken hata oluştu.", {
+        chat_id: chatId,
+        message_id: loadingMsg.message_id,
+      });
+    }
+  });
+
   bot.onText(/\/durum/, async (msg) => {
     const chatId = msg.chat.id;
     const sub = getSubscriber(chatId);
@@ -297,17 +429,23 @@ export function initBot(): void {
     const chatId = msg.chat.id;
     await bot!.sendMessage(
       chatId,
-      `🥇 *Altın Fiyat Botu — Yardım*\n\n` +
-      `📋 *Komutlar:*\n` +
+      `🥇 *Altın & Döviz Fiyat Botu — Yardım*\n\n` +
+      `📋 *Altın Komutları:*\n` +
       `/fiyat — Gram + ons altın fiyatı\n` +
       `/gram — Sadece gram altın fiyatı\n` +
-      `/ons — Sadece ons altın fiyatı\n` +
+      `/ons — Sadece ons altın fiyatı\n\n` +
+      `💱 *Döviz Komutları:*\n` +
+      `/doviz — EUR/USD, EUR/TRY, USD/TRY\n` +
+      `/usdtry — Dolar/TL alış-satış\n` +
+      `/eurtry — Euro/TL alış-satış\n` +
+      `/eurusd — Euro/Dolar alış-satış\n\n` +
+      `🔔 *Bildirim Komutları:*\n` +
       `/abone — Bildirim sıklığını seç (butonlu menü)\n` +
       `/durum — Abonelik durumunu gör\n` +
       `/iptal — Bildirimleri durdur\n` +
       `/yardim — Bu yardım mesajını göster\n\n` +
       `👥 Toplam abone: *${subscriberCount()}*\n` +
-      `📡 Kaynak: Harem Altın (altinkuru.net)`,
+      `📡 Kaynak: altinkuru.net / TCMB`,
       { parse_mode: "Markdown" }
     );
   });
@@ -316,7 +454,6 @@ export function initBot(): void {
     logger.error({ err: err.message }, "Telegram polling hatası");
   });
 
-  // Dakikada bir çalışır, her kullanıcının kendi intervaline göre bildirim gönderir
   cron.schedule("* * * * *", async () => {
     const due = getDueSubscribers();
     if (due.length === 0) return;

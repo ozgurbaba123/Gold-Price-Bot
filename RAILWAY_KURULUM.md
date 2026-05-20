@@ -1,44 +1,59 @@
-# Railway'de Ücretsiz Bot Kurulumu
+# Railway'de 7/24 Bot Kurulumu
 
 Railway'e deploy ederek botu Replit kapalıyken de 7/24 çalıştırabilirsiniz.
 
 ## Adımlar
 
-### 1. GitHub'a yükleyin
-Projeyi GitHub'a push etmeniz gerekiyor.
-- https://github.com adresine gidin ve yeni bir **private** repo oluşturun
+### 1. GitHub'a Push Edin
 - Replit'te sol menüden **Git** sekmesine tıklayın
-- "Connect to GitHub" ile GitHub hesabınızı bağlayın ve push edin
+- Değişiklikleri commit edip GitHub repo'nuza push edin
 
-### 2. Railway hesabı açın
+### 2. Railway Hesabı Açın
 - https://railway.app adresine gidin
 - "Start a New Project" → GitHub ile giriş yapın
 
-### 3. Projeyi bağlayın
+### 3. Projeyi Bağlayın
 - "Deploy from GitHub repo" seçin
-- Az önce oluşturduğunuz repo'yu seçin
-- Railway Dockerfile'ı otomatik algılar
+- Repo'nuzu seçin
+- Railway `Dockerfile`'ı otomatik algılar
 
-### 4. Environment variable ekleyin
+### 4. Environment Variable Ekleyin
 Railway dashboard'da projenizi açın:
 - **Variables** sekmesine tıklayın
-- "Add Variable" ile şunu ekleyin:
-  - Key: `TELEGRAM_BOT_TOKEN`
-  - Value: Bot token'ınız (BotFather'dan aldığınız)
+- Aşağıdaki değişkeni ekleyin:
 
-### 5. Deploy edin
+| Key | Value |
+|-----|-------|
+| `TELEGRAM_BOT_TOKEN` | BotFather'dan aldığınız token |
+
+> `DATABASE_URL` gerekmez — aboneler bellekte tutulur, Railway yeniden başlatınca sıfırlanır.
+
+### 5. Deploy Edin
 - "Deploy" butonuna basın
 - 2-3 dakika bekleyin — bot aktif olacak!
 
 ## Kontrol
 Deploy tamamlandıktan sonra Railway loglarında şunu görmelisiniz:
 ```
-Telegram botu başlatıldı
-Cron job: her 5 dakikada bildirim aktif
 Server listening
+Telegram botu başlatıldı
+Cron job: dakikada bir kontrol aktif
 ```
 
-## Ücretsiz Plan Limitleri
+## Bot Komutları
+| Komut | Açıklama |
+|-------|----------|
+| `/fiyat` | Gram + ons altın (alış/satış) |
+| `/gram` | Gram altın |
+| `/ons` | Ons altın |
+| `/doviz` | EUR/USD · EUR/TRY · USD/TRY (alış/satış) |
+| `/usdtry` | Dolar/TL kuru |
+| `/eurtry` | Euro/TL kuru |
+| `/eurusd` | Euro/Dolar kuru |
+| `/abone` | Otomatik bildirim ayarla |
+| `/iptal` | Bildirimleri durdur |
+| `/durum` | Abonelik durumunu gör |
+
+## Ücretsiz Plan
 Railway'in ücretsiz planı aylık **$5 kredi** verir.
-Bu bot için aylık tahmini maliyet: **~$0.50-1.00** (çok düşük)
-Yani ücretsiz kreditinizle aylarca çalışır!
+Bu bot için aylık tahmini maliyet: **~$0.50–1.00** → ücretsiz kreditinizle aylarca çalışır!
