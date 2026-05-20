@@ -74,19 +74,23 @@ def get_prices_haremaltin() -> dict:
         pct = (deg / alis * 100) if alis else 0
         return {"alis": alis, "satis": satis, "degisim": deg, "pct": pct}
 
+    usd_try_a = float(a["USDTRY"]["alis"])
     usd_try_s = float(a["USDTRY"]["satis"])
+    eur_try_a = float(a["EURTRY"]["alis"])
     eur_try_s = float(a["EURTRY"]["satis"])
-    usd_eur = usd_try_s / eur_try_s
+    usd_eur_a = usd_try_a / eur_try_a
+    usd_eur_s = usd_try_s / eur_try_s
+
+    def doviz(a_, s_):
+        deg = s_ - a_
+        return {"alis": a_, "satis": s_, "degisim": deg, "pct": (deg / a_ * 100) if a_ else 0}
 
     return {
-        "gram":   item("ALTIN"),
-        "ons":    item("ONS"),
-        "ceyrek": item("CEYREK_YENI"),
-        "yarim":  item("YARIM_YENI"),
-        "tam":    item("ATA_YENI"),
-        "usd_try": {"alis": float(a["USDTRY"]["alis"]), "satis": usd_try_s},
-        "eur_try": {"alis": float(a["EURTRY"]["alis"]), "satis": eur_try_s},
-        "usd_eur": usd_eur,
+        "gram":    item("ALTIN"),
+        "ons":     item("ONS"),
+        "usd_try": doviz(usd_try_a, usd_try_s),
+        "eur_try": doviz(eur_try_a, eur_try_s),
+        "usd_eur": doviz(usd_eur_a, usd_eur_s),
         "kaynak": "haremaltin.com",
     }
 
@@ -105,18 +109,23 @@ def get_prices_yedek() -> dict:
         pct = (deg / alis * 100) if alis else 0
         return {"alis": alis, "satis": satis, "degisim": deg, "pct": pct}
 
+    usd_try_a = parse_price(data["USD"]["Alış"])
     usd_try_s = parse_price(data["USD"]["Satış"])
+    eur_try_a = parse_price(data["EUR"]["Alış"])
     eur_try_s = parse_price(data["EUR"]["Satış"])
+    usd_eur_a = usd_try_a / eur_try_a
+    usd_eur_s = usd_try_s / eur_try_s
+
+    def doviz(a_, s_):
+        deg = s_ - a_
+        return {"alis": a_, "satis": s_, "degisim": deg, "pct": (deg / a_ * 100) if a_ else 0}
 
     return {
-        "gram":   item("gram-altin"),
-        "ons":    item("ons"),
-        "ceyrek": item("ceyrek-altin"),
-        "yarim":  item("yarim-altin"),
-        "tam":    item("tam-altin"),
-        "usd_try": {"alis": parse_price(data["USD"]["Alış"]), "satis": usd_try_s},
-        "eur_try": {"alis": parse_price(data["EUR"]["Alış"]), "satis": eur_try_s},
-        "usd_eur": usd_try_s / eur_try_s,
+        "gram":    item("gram-altin"),
+        "ons":     item("ons"),
+        "usd_try": doviz(usd_try_a, usd_try_s),
+        "eur_try": doviz(eur_try_a, eur_try_s),
+        "usd_eur": doviz(usd_eur_a, usd_eur_s),
         "kaynak": "yedek",
     }
 
@@ -143,31 +152,28 @@ def fmt_altin(label: str, emoji: str, p: dict) -> str:
 
 
 def fmt_doviz(label: str, emoji: str, p: dict) -> str:
+    ok = "📈" if p["degisim"] >= 0 else "📉"
+    sign = "+" if p["degisim"] >= 0 else ""
     return (
         f"{emoji} <b>{label}</b>\n"
         f"📥 Alış: {p['alis']:,.4f}\n"
         f"📤 Satış: {p['satis']:,.4f}\n"
+        f"{ok} Değişim: {sign}{p['degisim']:,.4f} ({sign}{p['pct']:.2f}%)\n"
     )
 
 
 def format_message(prices: dict) -> str:
     now = datetime.now(TZ).strftime("%H:%M — Harem Altın")
     msg = ""
-    msg += fmt_altin("Gram Altın",   "🥇", prices["gram"])
+    msg += fmt_altin("Gram Altın", "🥇", prices["gram"])
     msg += "\n"
-    msg += fmt_altin("Ons Altın",    "🏅", prices["ons"])
-    msg += "\n"
-    msg += fmt_altin("Çeyrek Altın", "🪙", prices["ceyrek"])
-    msg += "\n"
-    msg += fmt_altin("Yarım Altın",  "🪙", prices["yarim"])
-    msg += "\n"
-    msg += fmt_altin("Tam Altın",    "🪙", prices["tam"])
+    msg += fmt_altin("Ons Altın",  "🏅", prices["ons"])
     msg += "\n"
     msg += fmt_doviz("USD/TRY", "🇺🇸", prices["usd_try"])
     msg += "\n"
     msg += fmt_doviz("EUR/TRY", "🇪🇺", prices["eur_try"])
     msg += "\n"
-    msg += f"💱 <b>USD/EUR:</b> {prices['usd_eur']:,.4f}\n"
+    msg += fmt_doviz("USD/EUR", "💱", prices["usd_eur"])
     msg += f"\n🕐 {now}"
     return msg
 
