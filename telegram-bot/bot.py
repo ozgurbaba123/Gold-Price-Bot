@@ -293,6 +293,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start",    start_command))
+    app.add_handler(CommandHandler("abone",    subscribe_and_show))
     app.add_handler(CommandHandler("fiyatlar", fiyatlar_command))
     app.add_handler(CommandHandler("dur",      dur_command))
     app.add_handler(CommandHandler("debug",    debug_command))
@@ -305,7 +306,7 @@ def main():
         first=10,
     )
     logger.info("Bot başlatıldı %s — her %d dakikada bir fiyat gönderiliyor", VERSIYON, INTERVAL_MINUTES)
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, close_loop=False)
 
 
 if __name__ == "__main__":
