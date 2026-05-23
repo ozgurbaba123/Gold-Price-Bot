@@ -7,6 +7,7 @@ from datetime import datetime
 import pytz
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.error import Conflict
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -21,7 +22,7 @@ TIMEZONE         = os.getenv("TIMEZONE", "Europe/Istanbul")
 SUBSCRIBERS_FILE = "subscribers.json"
 
 TZ       = pytz.timezone(TIMEZONE)
-VERSIYON = "v4.6"
+VERSIYON = "v4.7"
 
 subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
@@ -71,7 +72,7 @@ def get_prices_haremaltin() -> dict:
     resp.raise_for_status()
     raw = resp.json()
     if "data" not in raw:
-        raise ValueError("Geçersiz yanıt")
+        raise ValueError("Gecersiz yanit")
     a = raw["data"]
 
     def item(key):
@@ -83,7 +84,7 @@ def get_prices_haremaltin() -> dict:
     usd_try = make_item(float(a["USDTRY"]["alis"]), float(a["USDTRY"]["satis"]))
     eur_try = make_item(float(a["EURTRY"]["alis"]), float(a["EURTRY"]["satis"]))
     usd_eur = make_item(usd_try["alis"] / eur_try["alis"], usd_try["satis"] / eur_try["satis"])
-    return {"gram": gram, "ons": ons, "usd_try": usd_try, "eur_try": eur_try, "usd_eur": usd_eur, "kaynak": "Harem Altın"}
+    return {"gram": gram, "ons": ons, "usd_try": usd_try, "eur_try": eur_try, "usd_eur": usd_eur, "kaynak": "Harem Altin"}
 
 
 def get_prices_yedek() -> dict:
@@ -96,14 +97,16 @@ def get_prices_yedek() -> dict:
     data = resp.json()
 
     def item(key):
-        return make_item(parse_price(data[key]["Al\u0131\u015f"]), parse_price(data[key]["Sat\u0131\u015f"]))
+        alis  = parse_price(list(data[key].values())[0])
+        satis = parse_price(list(data[key].values())[1])
+        return make_item(alis, satis)
 
     gram    = item("gram-altin")
     ons     = item("ons")
-    usd_try = make_item(parse_price(data["USD"]["Al\u0131\u015f"]), parse_price(data["USD"]["Sat\u0131\u015f"]))
-    eur_try = make_item(parse_price(data["EUR"]["Al\u0131\u015f"]), parse_price(data["EUR"]["Sat\u0131\u015f"]))
+    usd_try = item("USD")
+    eur_try = item("EUR")
     usd_eur = make_item(usd_try["alis"] / eur_try["alis"], usd_try["satis"] / eur_try["satis"])
-    return {"gram": gram, "ons": ons, "usd_try": usd_try, "eur_try": eur_try, "usd_eur": usd_eur, "kaynak": "Güncel Kur"}
+    return {"gram": gram, "ons": ons, "usd_try": usd_try, "eur_try": eur_try, "usd_eur": usd_eur, "kaynak": "Guncel Kur"}
 
 
 def get_prices() -> dict:
@@ -119,35 +122,35 @@ def get_prices() -> dict:
 
 
 def fmt_altin(label: str, emoji: str, p: dict) -> str:
-    ok   = "📈" if p["degisim"] >= 0 else "📉"
+    ok   = "\U0001f4c8" if p["degisim"] >= 0 else "\U0001f4c9"
     sign = "+" if p["degisim"] >= 0 else ""
     return (
         f"{emoji} <b>{label}</b>\n"
-        f"📥 Alış: {p['alis']:,.2f} ₺\n"
-        f"📤 Satış: {p['satis']:,.2f} ₺\n"
-        f"{ok} Değişim: {sign}{p['degisim']:,.2f} ₺ ({sign}{p['pct']:.2f}%)\n"
+        f"\U0001f4e5 Alis: {p['alis']:,.2f} \u20ba\n"
+        f"\U0001f4e4 Satis: {p['satis']:,.2f} \u20ba\n"
+        f"{ok} Degisim: {sign}{p['degisim']:,.2f} \u20ba ({sign}{p['pct']:.2f}%)\n"
     )
 
 
 def fmt_doviz(label: str, emoji: str, p: dict) -> str:
-    ok   = "📈" if p["degisim"] >= 0 else "📉"
+    ok   = "\U0001f4c8" if p["degisim"] >= 0 else "\U0001f4c9"
     sign = "+" if p["degisim"] >= 0 else ""
     return (
         f"{emoji} <b>{label}</b>\n"
-        f"📥 Alış: {p['alis']:,.4f}\n"
-        f"📤 Satış: {p['satis']:,.4f}\n"
-        f"{ok} Değişim: {sign}{p['degisim']:,.4f} ({sign}{p['pct']:.2f}%)\n"
+        f"\U0001f4e5 Alis: {p['alis']:,.4f}\n"
+        f"\U0001f4e4 Satis: {p['satis']:,.4f}\n"
+        f"{ok} Degisim: {sign}{p['degisim']:,.4f} ({sign}{p['pct']:.2f}%)\n"
     )
 
 
 def format_message(prices: dict) -> str:
-    now = datetime.now(TZ).strftime("%H:%M — %d.%m.%Y")
-    msg  = fmt_altin("Gram Altın", "🥇", prices["gram"]) + "\n"
-    msg += fmt_altin("Ons Altın",  "🏅", prices["ons"])  + "\n"
-    msg += fmt_doviz("USD/TRY",    "🇺🇸", prices["usd_try"]) + "\n"
-    msg += fmt_doviz("EUR/TRY",    "🇪🇺", prices["eur_try"]) + "\n"
-    msg += fmt_doviz("USD/EUR",    "💱",  prices["usd_eur"])
-    msg += f"\n🕐 {now} | {prices.get('kaynak', '')}"
+    now = datetime.now(TZ).strftime("%H:%M \u2014 %d.%m.%Y")
+    msg  = fmt_altin("Gram Altin",  "\U0001f947", prices["gram"])    + "\n"
+    msg += fmt_altin("Ons Altin",   "\U0001f3c5", prices["ons"])     + "\n"
+    msg += fmt_doviz("USD/TRY",     "\U0001f1fa\U0001f1f8", prices["usd_try"]) + "\n"
+    msg += fmt_doviz("EUR/TRY",     "\U0001f1ea\U0001f1fa", prices["eur_try"]) + "\n"
+    msg += fmt_doviz("USD/EUR",     "\U0001f4b1", prices["usd_eur"])
+    msg += f"\n\U0001f550 {now} | {prices.get('kaynak', '')}"
     return msg
 
 
@@ -174,13 +177,13 @@ async def subscribe_and_show(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         msg = format_message(get_prices())
         bilgi = (
-            f"✅ <b>Abone oldunuz!</b> Her <b>{INTERVAL_MINUTES} dakikada</b> bir otomatik fiyat alacaksınız.\n"
-            f"Durdurmak için /dur yazın.\n\n"
-        ) if yeni else f"✅ Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat alıyorsunuz.\n\n"
+            f"\u2705 <b>Abone oldunuz!</b> Her <b>{INTERVAL_MINUTES} dakikada</b> bir otomatik fiyat alacaksiniz.\n"
+            f"Durdurmak icin /dur yazin.\n\n"
+        ) if yeni else f"\u2705 Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat aliyorsunuz.\n\n"
         await update.message.reply_text(bilgi + msg, parse_mode="HTML")
     except Exception as e:
         logger.error("Abone hatasi: %s", e)
-        await update.message.reply_text("❌ Fiyatlar alınamadı, lütfen tekrar deneyin.")
+        await update.message.reply_text("\u274c Fiyatlar alinamadi, lutfen tekrar deneyin.")
 
 
 async def fiyatlar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,15 +191,15 @@ async def fiyatlar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(format_message(get_prices()), parse_mode="HTML")
     except Exception as e:
         logger.error("Fiyatlar hatasi: %s", e)
-        await update.message.reply_text("❌ Fiyatlar alınamadı.")
+        await update.message.reply_text("\u274c Fiyatlar alinamadi.")
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"👋 <b>Altın & Döviz Fiyatları Botuna Hoş Geldiniz!</b>\n\n"
-        f"• /abone veya <b>abone</b> — Abone ol\n"
-        f"• /fiyatlar — Anlık fiyatları göster\n"
-        f"• /dur — Otomatik güncellemeleri durdur",
+        f"\U0001f44b <b>Altin & Doviz Fiyatlari Botuna Hos Geldiniz!</b>\n\n"
+        f"\u2022 /abone veya <b>abone</b> \u2014 Abone ol\n"
+        f"\u2022 /fiyatlar \u2014 Anlik fiyatlari goster\n"
+        f"\u2022 /dur \u2014 Otomatik guncellemeleri durdur",
         parse_mode="HTML",
     )
 
@@ -206,19 +209,19 @@ async def dur_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in subscribers:
         subscribers.discard(chat_id)
         save_subscribers()
-        await update.message.reply_text("🔕 Durduruldu. Tekrar için /abone yazın.")
+        await update.message.reply_text("\U0001f515 Durduruldu. Tekrar icin /abone yazin.")
     else:
-        await update.message.reply_text("Zaten abone değilsiniz.")
+        await update.message.reply_text("Zaten abone degilsiniz.")
 
 
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         prices = get_prices()
         await update.message.reply_text(
-            f"🔧 <b>{VERSIYON}</b>\n"
+            f"\U0001f527 <b>{VERSIYON}</b>\n"
             f"Kaynak: {prices['kaynak']}\n"
-            f"Gram: {prices['gram']['satis']:,.2f} ₺\n"
-            f"Ons: {prices['ons']['satis']:,.2f} ₺\n"
+            f"Gram: {prices['gram']['satis']:,.2f}\n"
+            f"Ons: {prices['ons']['satis']:,.2f}\n"
             f"USD/TRY: {prices['usd_try']['satis']:,.4f}\n"
             f"EUR/TRY: {prices['eur_try']['satis']:,.4f}\n"
             f"USD/EUR: {prices['usd_eur']['satis']:,.4f}\n"
@@ -226,7 +229,7 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
         )
     except Exception as e:
-        await update.message.reply_text(f"❌ Hata: {e}")
+        await update.message.reply_text(f"\u274c Hata: {e}")
 
 
 async def metin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,12 +237,7 @@ async def metin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await subscribe_and_show(update, context)
 
 
-def main():
-    load_subscribers()
-    logger.info("%s baslatiliyor, %d saniye bekleniyor...", VERSIYON, 10)
-    time.sleep(10)  # Eski instance'in kapanmasi icin bekle
-    logger.info("Polling baslatiliyor — %s", VERSIYON)
-
+def build_app():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",    start_command))
     app.add_handler(CommandHandler("abone",    subscribe_and_show))
@@ -248,7 +246,26 @@ def main():
     app.add_handler(CommandHandler("debug",    debug_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, metin_handler))
     app.job_queue.run_repeating(send_prices_to_all, interval=INTERVAL_MINUTES * 60, first=15)
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    return app
+
+
+def main():
+    load_subscribers()
+    attempt = 0
+    while True:
+        attempt += 1
+        wait = min(10 * attempt, 60)  # 10s, 20s, 30s... maks 60s
+        logger.info("%s — deneme %d, %ds bekleniyor", VERSIYON, attempt, wait)
+        time.sleep(wait)
+        try:
+            app = build_app()
+            logger.info("Polling baslatildi")
+            app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+            break  # Normal cikis
+        except Conflict:
+            logger.warning("Conflict hatasi — baska instance calisiyor, yeniden denenecek")
+        except Exception as e:
+            logger.error("Beklenmedik hata: %s — yeniden denenecek", e)
 
 
 if __name__ == "__main__":
