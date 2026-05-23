@@ -22,7 +22,7 @@ TIMEZONE         = os.getenv("TIMEZONE", "Europe/Istanbul")
 SUBSCRIBERS_FILE = "subscribers.json"
 
 TZ       = pytz.timezone(TIMEZONE)
-VERSIYON = "v4.7"
+VERSIYON = "v4.7b"
 
 subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
@@ -97,9 +97,7 @@ def get_prices_yedek() -> dict:
     data = resp.json()
 
     def item(key):
-        alis  = parse_price(list(data[key].values())[0])
-        satis = parse_price(list(data[key].values())[1])
-        return make_item(alis, satis)
+        return make_item(parse_price(data[key]['Alış']), parse_price(data[key]['Satış']))
 
     gram    = item("gram-altin")
     ons     = item("ons")
