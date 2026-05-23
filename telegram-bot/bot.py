@@ -20,12 +20,11 @@ TIMEZONE = os.getenv("TIMEZONE", "Europe/Istanbul")
 SUBSCRIBERS_FILE = "subscribers.json"
 
 TZ = pytz.timezone(TIMEZONE)
+VERSIYON = "v4.3"
 
 subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
 )
-
-VERSIYON = "v4.2"
 
 
 def load_subscribers():
@@ -50,6 +49,11 @@ def parse_price(val: str) -> float:
     return float(val.replace(".", "").replace(",", ".").replace("$", "").strip())
 
 
+def doviz_item(a_, s_):
+    deg = s_ - a_
+    return {"alis": a_, "satis": s_, "degisim": deg, "pct": (deg / a_ * 100) if a_ else 0}
+
+
 def get_prices_haremaltin() -> dict:
     resp = requests.post(
         "https://www.haremaltin.com/dashboard/ajax/getData",
@@ -68,6 +72,8 @@ def get_prices_haremaltin() -> dict:
     raw = resp.json()
     a = raw["data"]
 
+    logger.info("Haremaltin API anahtarlari: %s", list(a.keys()))
+
     def item(key):
         d = a[key]
         alis = float(d["alis"])
@@ -76,32 +82,34 @@ def get_prices_haremaltin() -> dict:
         pct = (deg / alis * 100) if alis else 0
         return {"alis": alis, "satis": satis, "degisim": deg, "pct": pct}
 
-    def doviz(a_, s_):
-        deg = s_ - a_
-        return {"alis": a_, "satis": s_, "degisim": deg, "pct": (deg / a_ * 100) if a_ else 0}
-
     gram = item("ALTIN")
 
     try:
         ons = item("ONS")
     except Exception:
-        ons_alis  = gram["alis"]  * 31.1035
-        ons_satis = gram["satis"] * 31.1035
-        ons = doviz(ons_alis, ons_satis)
+        ons = doviz_item(gram["alis"] * 31.1035, gram["satis"] * 31.1035)
 
-    usd_try_a = float(a["USDTRY"]["alis"])
-    usd_try_s = float(a["USDTRY"]["satis"])
-    eur_try_a = float(a["EURTRY"]["alis"])
-    eur_try_s = float(a["EURTRY"]["satis"])
+    # Döviz — birden fazla olası anahtar adı deneniyor
+    def get_doviz_pair(key_try):
+        for k in key_try:
+            try:
+                d = a[k]
+                return float(d["alis"]), float(d["satis"])
+            except Exception:
+                continue
+        raise KeyError(f"Hiçbir anahtar bulunamadı: {key_try}")
+
+    usd_try_a, usd_try_s = get_doviz_pair(["USDTRY", "USD_TRY", "USD/TRY", "usdtry"])
+    eur_try_a, eur_try_s = get_doviz_pair(["EURTRY", "EUR_TRY", "EUR/TRY", "eurtry"])
     usd_eur_a = usd_try_a / eur_try_a
     usd_eur_s = usd_try_s / eur_try_s
 
     return {
         "gram":    gram,
         "ons":     ons,
-        "usd_try": doviz(usd_try_a, usd_try_s),
-        "eur_try": doviz(eur_try_a, eur_try_s),
-        "usd_eur": doviz(usd_eur_a, usd_eur_s),
+        "usd_try": doviz_item(usd_try_a, usd_try_s),
+        "eur_try": doviz_item(eur_try_a, eur_try_s),
+        "usd_eur": doviz_item(usd_eur_a, usd_eur_s),
         "kaynak":  "haremaltin.com",
     }
 
@@ -127,16 +135,12 @@ def get_prices_yedek() -> dict:
     usd_eur_a = usd_try_a / eur_try_a
     usd_eur_s = usd_try_s / eur_try_s
 
-    def doviz(a_, s_):
-        deg = s_ - a_
-        return {"alis": a_, "satis": s_, "degisim": deg, "pct": (deg / a_ * 100) if a_ else 0}
-
     return {
         "gram":    item("gram-altin"),
         "ons":     item("ons"),
-        "usd_try": doviz(usd_try_a, usd_try_s),
-        "eur_try": doviz(eur_try_a, eur_try_s),
-        "usd_eur": doviz(usd_eur_a, usd_eur_s),
+        "usd_try": doviz_item(usd_try_a, usd_try_s),
+        "eur_try": doviz_item(eur_try_a, eur_try_s),
+        "usd_eur": doviz_item(usd_eur_a, usd_eur_s),
         "kaynak":  "yedek",
     }
 
@@ -147,8 +151,14 @@ def get_prices() -> dict:
         logger.info("Fiyatlar haremaltin.com'dan alındı")
         return prices
     except Exception as e:
-        logger.warning("Haremaltin erişilemedi (%s), yedek kaynak kullanılıyor", e)
-        return get_prices_yedek()
+        logger.warning("Haremaltin erişilemedi (%s), yedek kaynak deneniyor", e)
+        try:
+            prices = get_prices_yedek()
+            logger.info("Yedek kaynaktan alındı")
+            return prices
+        except Exception as e2:
+            logger.error("Yedek kaynak da başarısız: %s", e2)
+            raise
 
 
 def fmt_altin(label: str, emoji: str, p: dict) -> str:
@@ -185,7 +195,7 @@ def format_message(prices: dict) -> str:
     msg += fmt_doviz("EUR/TRY", "🇪🇺", prices["eur_try"])
     msg += "\n"
     msg += fmt_doviz("USD/EUR", "💱",  prices["usd_eur"])
-    msg += f"\n🕐 {now}"
+    msg += f"\n🕐 {now} • {VERSIYON}"
     return msg
 
 
@@ -242,7 +252,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 <b>Altın & Döviz Fiyatları Botuna Hoş Geldiniz!</b>\n\n"
         f"<b>Komutlar:</b>\n"
-        f"• <b>abone</b> — Abone ol ve anlık fiyatları gör\n"
+        f"• <b>abone</b> veya /abone — Abone ol ve anlık fiyatları gör\n"
         f"• /fiyatlar — Anlık fiyatları göster\n"
         f"• /dur — Otomatik güncellemeleri durdur\n"
         f"• /start — Bu mesajı göster",
@@ -274,6 +284,9 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🔧 <b>Debug — {VERSIYON}</b>\n"
             f"Kaynak: {kaynak}\n"
+            f"Gram: {prices['gram']['satis']:,.2f} ₺\n"
+            f"USD/TRY: {prices['usd_try']['satis']:,.4f}\n"
+            f"EUR/TRY: {prices['eur_try']['satis']:,.4f}\n"
             f"Abone: {len(subscribers)}",
             parse_mode="HTML",
         )
@@ -306,7 +319,7 @@ def main():
         first=10,
     )
     logger.info("Bot başlatıldı %s — her %d dakikada bir fiyat gönderiliyor", VERSIYON, INTERVAL_MINUTES)
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, close_loop=False)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
