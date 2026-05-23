@@ -2,8 +2,10 @@ import os
 import json
 import time
 import logging
+import threading
 import requests
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import pytz
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -19,15 +21,35 @@ BOT_TOKEN        = os.environ["BOT_TOKEN"]
 CHAT_IDS_RAW     = os.getenv("CHAT_IDS", "")
 INTERVAL_MINUTES = int(os.getenv("INTERVAL_MINUTES", "30"))
 TIMEZONE         = os.getenv("TIMEZONE", "Europe/Istanbul")
+PORT             = int(os.getenv("PORT", "8080"))
 SUBSCRIBERS_FILE = "subscribers.json"
 
 TZ       = pytz.timezone(TIMEZONE)
-VERSIYON = "v4.7b"
+VERSIYON = "v4.8"
 
 subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
 )
 
+
+# ── Health check HTTP server ──────────────────────────────────────────────────
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, *args):
+        pass  # sessiz kal
+
+
+def start_health_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    logger.info("Health server baslatildi — port %d", PORT)
+    server.serve_forever()
+
+
+# ── Veri ─────────────────────────────────────────────────────────────────────
 
 def load_subscribers():
     if os.path.exists(SUBSCRIBERS_FILE):
@@ -76,8 +98,7 @@ def get_prices_haremaltin() -> dict:
     a = raw["data"]
 
     def item(key):
-        d = a[key]
-        return make_item(float(d["alis"]), float(d["satis"]))
+        return make_item(float(a[key]["alis"]), float(a[key]["satis"]))
 
     gram    = item("ALTIN")
     ons     = item("ONS")
@@ -97,7 +118,9 @@ def get_prices_yedek() -> dict:
     data = resp.json()
 
     def item(key):
-        return make_item(parse_price(data[key]['Alış']), parse_price(data[key]['Satış']))
+        alis  = parse_price(data[key]["Al\u0131\u015f"])
+        satis = parse_price(data[key]["Sat\u0131\u015f"])
+        return make_item(alis, satis)
 
     gram    = item("gram-altin")
     ons     = item("ons")
@@ -113,11 +136,13 @@ def get_prices() -> dict:
         logger.info("Haremaltin'den alindi")
         return p
     except Exception as e:
-        logger.warning("Haremaltin basarisiz (%s), yedek deneniyor", e)
+        logger.warning("Haremaltin basarisiz: %s — yedek deneniyor", e)
     p = get_prices_yedek()
     logger.info("Yedek kaynaktan alindi")
     return p
 
+
+# ── Mesaj formatlama ──────────────────────────────────────────────────────────
 
 def fmt_altin(label: str, emoji: str, p: dict) -> str:
     ok   = "\U0001f4c8" if p["degisim"] >= 0 else "\U0001f4c9"
@@ -147,10 +172,12 @@ def format_message(prices: dict) -> str:
     msg += fmt_altin("Ons Altin",   "\U0001f3c5", prices["ons"])     + "\n"
     msg += fmt_doviz("USD/TRY",     "\U0001f1fa\U0001f1f8", prices["usd_try"]) + "\n"
     msg += fmt_doviz("EUR/TRY",     "\U0001f1ea\U0001f1fa", prices["eur_try"]) + "\n"
-    msg += fmt_doviz("USD/EUR",     "\U0001f4b1", prices["usd_eur"])
+    msg += fmt_doviz("USD/EUR",     "\U0001f4b1",            prices["usd_eur"])
     msg += f"\n\U0001f550 {now} | {prices.get('kaynak', '')}"
     return msg
 
+
+# ── Telegram handler'lar ──────────────────────────────────────────────────────
 
 async def send_prices_to_all(context: ContextTypes.DEFAULT_TYPE):
     if not subscribers:
@@ -177,27 +204,28 @@ async def subscribe_and_show(update: Update, context: ContextTypes.DEFAULT_TYPE)
         bilgi = (
             f"\u2705 <b>Abone oldunuz!</b> Her <b>{INTERVAL_MINUTES} dakikada</b> bir otomatik fiyat alacaksiniz.\n"
             f"Durdurmak icin /dur yazin.\n\n"
-        ) if yeni else f"\u2705 Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat aliyorsunuz.\n\n"
+        ) if yeni else (
+            f"\u2705 Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat aliyorsunuz.\n\n"
+        )
         await update.message.reply_text(bilgi + msg, parse_mode="HTML")
     except Exception as e:
         logger.error("Abone hatasi: %s", e)
-        await update.message.reply_text("\u274c Fiyatlar alinamadi, lutfen tekrar deneyin.")
+        await update.message.reply_text(f"\u274c Fiyatlar alinamadi: {e}")
 
 
 async def fiyatlar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text(format_message(get_prices()), parse_mode="HTML")
     except Exception as e:
-        logger.error("Fiyatlar hatasi: %s", e)
-        await update.message.reply_text("\u274c Fiyatlar alinamadi.")
+        await update.message.reply_text(f"\u274c Hata: {e}")
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"\U0001f44b <b>Altin & Doviz Fiyatlari Botuna Hos Geldiniz!</b>\n\n"
-        f"\u2022 /abone veya <b>abone</b> \u2014 Abone ol\n"
-        f"\u2022 /fiyatlar \u2014 Anlik fiyatlari goster\n"
-        f"\u2022 /dur \u2014 Otomatik guncellemeleri durdur",
+        f"\U0001f44b <b>Altin & Doviz Fiyatlari Botuna Hos Geldiniz!</b> ({VERSIYON})\n\n"
+        f"\u2022 /abone \u2014 Abone ol\n"
+        f"\u2022 /fiyatlar \u2014 Anlik fiyatlar\n"
+        f"\u2022 /dur \u2014 Aboneligi durdur",
         parse_mode="HTML",
     )
 
@@ -235,6 +263,8 @@ async def metin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await subscribe_and_show(update, context)
 
 
+# ── Ana fonksiyon ─────────────────────────────────────────────────────────────
+
 def build_app():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",    start_command))
@@ -249,21 +279,26 @@ def build_app():
 
 def main():
     load_subscribers()
+
+    # Railway health check icin HTTP server'i arka plana al
+    t = threading.Thread(target=start_health_server, daemon=True)
+    t.start()
+
     attempt = 0
     while True:
         attempt += 1
-        wait = min(10 * attempt, 60)  # 10s, 20s, 30s... maks 60s
+        wait = min(15 * attempt, 60)
         logger.info("%s — deneme %d, %ds bekleniyor", VERSIYON, attempt, wait)
         time.sleep(wait)
         try:
             app = build_app()
-            logger.info("Polling baslatildi")
+            logger.info("Polling baslatildi — %s", VERSIYON)
             app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-            break  # Normal cikis
+            break
         except Conflict:
-            logger.warning("Conflict hatasi — baska instance calisiyor, yeniden denenecek")
+            logger.warning("Conflict — baska instance calisiyor, %ds sonra yeniden denenecek", min(15*(attempt+1),60))
         except Exception as e:
-            logger.error("Beklenmedik hata: %s — yeniden denenecek", e)
+            logger.error("Hata: %s — yeniden denenecek", e)
 
 
 if __name__ == "__main__":
