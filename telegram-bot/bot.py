@@ -25,7 +25,7 @@ subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
 )
 
-VERSIYON = "v4.1"
+VERSIYON = "v4.2"
 
 
 def load_subscribers():
@@ -151,47 +151,41 @@ def get_prices() -> dict:
         return get_prices_yedek()
 
 
-def format_message(prices: dict) -> str:
-    now = datetime.now(TZ).strftime("%H:%M  %d.%m.%Y")
-
-    def trend(d):
-        return "📈" if d >= 0 else "📉"
-
-    def sgn(d):
-        return "+" if d >= 0 else ""
-
-    g = prices["gram"]
-    o = prices["ons"]
-    u = prices["usd_try"]
-    e = prices["eur_try"]
-    ue = prices["usd_eur"]
-
-    msg = (
-        f"🕐 <b>{now}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🥇 <b>Gram Altın</b>\n"
-        f"   A: <b>{g['alis']:,.2f} ₺</b>  •  S: <b>{g['satis']:,.2f} ₺</b>\n"
-        f"   {trend(g['degisim'])} {sgn(g['degisim'])}{g['degisim']:,.2f} ₺  ({sgn(g['pct'])}{g['pct']:.2f}%)\n"
-        f"\n"
-        f"🏅 <b>Ons Altın</b>\n"
-        f"   A: <b>{o['alis']:,.2f} ₺</b>  •  S: <b>{o['satis']:,.2f} ₺</b>\n"
-        f"   {trend(o['degisim'])} {sgn(o['degisim'])}{o['degisim']:,.2f} ₺  ({sgn(o['pct'])}{o['pct']:.2f}%)\n"
-        f"\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"🇺🇸 <b>USD/TRY</b>\n"
-        f"   A: <b>{u['alis']:,.4f}</b>  •  S: <b>{u['satis']:,.4f}</b>\n"
-        f"   {trend(u['degisim'])} {sgn(u['degisim'])}{u['degisim']:,.4f}  ({sgn(u['pct'])}{u['pct']:.2f}%)\n"
-        f"\n"
-        f"🇪🇺 <b>EUR/TRY</b>\n"
-        f"   A: <b>{e['alis']:,.4f}</b>  •  S: <b>{e['satis']:,.4f}</b>\n"
-        f"   {trend(e['degisim'])} {sgn(e['degisim'])}{e['degisim']:,.4f}  ({sgn(e['pct'])}{e['pct']:.2f}%)\n"
-        f"\n"
-        f"💱 <b>USD/EUR</b>\n"
-        f"   A: <b>{ue['alis']:,.4f}</b>  •  S: <b>{ue['satis']:,.4f}</b>\n"
-        f"   {trend(ue['degisim'])} {sgn(ue['degisim'])}{ue['degisim']:,.4f}  ({sgn(ue['pct'])}{ue['pct']:.2f}%)\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"📡 Kaynak: Harem Altın"
+def fmt_altin(label: str, emoji: str, p: dict) -> str:
+    ok = "📈" if p["degisim"] >= 0 else "📉"
+    sign = "+" if p["degisim"] >= 0 else ""
+    return (
+        f"{emoji} <b>{label}</b>\n"
+        f"📥 Alış: {p['alis']:,.2f} ₺\n"
+        f"📤 Satış: {p['satis']:,.2f} ₺\n"
+        f"{ok} Değişim: {sign}{p['degisim']:,.2f} ₺ ({sign}{p['pct']:.2f}%)\n"
     )
+
+
+def fmt_doviz(label: str, emoji: str, p: dict) -> str:
+    ok = "📈" if p["degisim"] >= 0 else "📉"
+    sign = "+" if p["degisim"] >= 0 else ""
+    return (
+        f"{emoji} <b>{label}</b>\n"
+        f"📥 Alış: {p['alis']:,.4f}\n"
+        f"📤 Satış: {p['satis']:,.4f}\n"
+        f"{ok} Değişim: {sign}{p['degisim']:,.4f} ({sign}{p['pct']:.2f}%)\n"
+    )
+
+
+def format_message(prices: dict) -> str:
+    now = datetime.now(TZ).strftime("%H:%M — Harem Altın")
+    msg = ""
+    msg += fmt_altin("Gram Altın", "🥇", prices["gram"])
+    msg += "\n"
+    msg += fmt_altin("Ons Altın",  "🏅", prices["ons"])
+    msg += "\n"
+    msg += fmt_doviz("USD/TRY", "🇺🇸", prices["usd_try"])
+    msg += "\n"
+    msg += fmt_doviz("EUR/TRY", "🇪🇺", prices["eur_try"])
+    msg += "\n"
+    msg += fmt_doviz("USD/EUR", "💱",  prices["usd_eur"])
+    msg += f"\n🕐 {now}"
     return msg
 
 
