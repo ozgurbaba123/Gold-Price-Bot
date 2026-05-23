@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import logging
 import requests
 from datetime import datetime
@@ -13,16 +14,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN      = os.environ["BOT_TOKEN"]
-CHAT_IDS_RAW   = os.getenv("CHAT_IDS", "")
+BOT_TOKEN        = os.environ["BOT_TOKEN"]
+CHAT_IDS_RAW     = os.getenv("CHAT_IDS", "")
 INTERVAL_MINUTES = int(os.getenv("INTERVAL_MINUTES", "30"))
-TIMEZONE       = os.getenv("TIMEZONE", "Europe/Istanbul")
-WEBHOOK_URL    = os.getenv("WEBHOOK_URL", "")          # Railway public URL
-PORT           = int(os.getenv("PORT", "8080"))
+TIMEZONE         = os.getenv("TIMEZONE", "Europe/Istanbul")
 SUBSCRIBERS_FILE = "subscribers.json"
 
-TZ = pytz.timezone(TIMEZONE)
-VERSIYON = "v4.5"
+TZ       = pytz.timezone(TIMEZONE)
+VERSIYON = "v4.6"
 
 subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
@@ -79,12 +78,8 @@ def get_prices_haremaltin() -> dict:
         d = a[key]
         return make_item(float(d["alis"]), float(d["satis"]))
 
-    gram = item("ALTIN")
-    try:
-        ons = item("ONS")
-    except Exception:
-        ons = make_item(gram["alis"] * 31.1035, gram["satis"] * 31.1035)
-
+    gram    = item("ALTIN")
+    ons     = item("ONS")
     usd_try = make_item(float(a["USDTRY"]["alis"]), float(a["USDTRY"]["satis"]))
     eur_try = make_item(float(a["EURTRY"]["alis"]), float(a["EURTRY"]["satis"]))
     usd_eur = make_item(usd_try["alis"] / eur_try["alis"], usd_try["satis"] / eur_try["satis"])
@@ -101,12 +96,12 @@ def get_prices_yedek() -> dict:
     data = resp.json()
 
     def item(key):
-        return make_item(parse_price(data[key]["Alış"]), parse_price(data[key]["Satış"]))
+        return make_item(parse_price(data[key]["Al\u0131\u015f"]), parse_price(data[key]["Sat\u0131\u015f"]))
 
     gram    = item("gram-altin")
     ons     = item("ons")
-    usd_try = make_item(parse_price(data["USD"]["Alış"]), parse_price(data["USD"]["Satış"]))
-    eur_try = make_item(parse_price(data["EUR"]["Alış"]), parse_price(data["EUR"]["Satış"]))
+    usd_try = make_item(parse_price(data["USD"]["Al\u0131\u015f"]), parse_price(data["USD"]["Sat\u0131\u015f"]))
+    eur_try = make_item(parse_price(data["EUR"]["Al\u0131\u015f"]), parse_price(data["EUR"]["Sat\u0131\u015f"]))
     usd_eur = make_item(usd_try["alis"] / eur_try["alis"], usd_try["satis"] / eur_try["satis"])
     return {"gram": gram, "ons": ons, "usd_try": usd_try, "eur_try": eur_try, "usd_eur": usd_eur, "kaynak": "Güncel Kur"}
 
@@ -219,13 +214,14 @@ async def dur_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         prices = get_prices()
-        mod = "webhook" if WEBHOOK_URL else "polling"
         await update.message.reply_text(
-            f"🔧 <b>{VERSIYON}</b> | {mod}\n"
+            f"🔧 <b>{VERSIYON}</b>\n"
             f"Kaynak: {prices['kaynak']}\n"
             f"Gram: {prices['gram']['satis']:,.2f} ₺\n"
+            f"Ons: {prices['ons']['satis']:,.2f} ₺\n"
             f"USD/TRY: {prices['usd_try']['satis']:,.4f}\n"
             f"EUR/TRY: {prices['eur_try']['satis']:,.4f}\n"
+            f"USD/EUR: {prices['usd_eur']['satis']:,.4f}\n"
             f"Abone: {len(subscribers)}",
             parse_mode="HTML",
         )
@@ -240,27 +236,19 @@ async def metin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     load_subscribers()
-    app = Application.builder().token(BOT_TOKEN).build()
+    logger.info("%s baslatiliyor, %d saniye bekleniyor...", VERSIYON, 10)
+    time.sleep(10)  # Eski instance'in kapanmasi icin bekle
+    logger.info("Polling baslatiliyor — %s", VERSIYON)
 
+    app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",    start_command))
     app.add_handler(CommandHandler("abone",    subscribe_and_show))
     app.add_handler(CommandHandler("fiyatlar", fiyatlar_command))
     app.add_handler(CommandHandler("dur",      dur_command))
     app.add_handler(CommandHandler("debug",    debug_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, metin_handler))
-    app.job_queue.run_repeating(send_prices_to_all, interval=INTERVAL_MINUTES * 60, first=10)
-
-    if WEBHOOK_URL:
-        logger.info("Webhook modu: %s port %d", WEBHOOK_URL, PORT)
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            webhook_url=WEBHOOK_URL,
-            drop_pending_updates=True,
-        )
-    else:
-        logger.info("Polling modu baslatildi — %s", VERSIYON)
-        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    app.job_queue.run_repeating(send_prices_to_all, interval=INTERVAL_MINUTES * 60, first=15)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
