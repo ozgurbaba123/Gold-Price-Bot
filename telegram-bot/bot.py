@@ -25,6 +25,8 @@ subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
 )
 
+VERSIYON = "v4.1"
+
 
 def load_subscribers():
     if os.path.exists(SUBSCRIBERS_FILE):
@@ -47,8 +49,6 @@ def save_subscribers():
 def parse_price(val: str) -> float:
     return float(val.replace(".", "").replace(",", ".").replace("$", "").strip())
 
-
-VERSIYON = "v4.0"
 
 def get_prices_haremaltin() -> dict:
     resp = requests.post(
@@ -85,10 +85,8 @@ def get_prices_haremaltin() -> dict:
     try:
         ons = item("ONS")
     except Exception:
-        gram_alis = gram["alis"]
-        gram_satis = gram["satis"]
-        ons_alis = gram_alis * 31.1035
-        ons_satis = gram_satis * 31.1035
+        ons_alis  = gram["alis"]  * 31.1035
+        ons_satis = gram["satis"] * 31.1035
         ons = doviz(ons_alis, ons_satis)
 
     usd_try_a = float(a["USDTRY"]["alis"])
@@ -104,7 +102,7 @@ def get_prices_haremaltin() -> dict:
         "usd_try": doviz(usd_try_a, usd_try_s),
         "eur_try": doviz(eur_try_a, eur_try_s),
         "usd_eur": doviz(usd_eur_a, usd_eur_s),
-        "kaynak": "haremaltin.com",
+        "kaynak":  "haremaltin.com",
     }
 
 
@@ -139,7 +137,7 @@ def get_prices_yedek() -> dict:
         "usd_try": doviz(usd_try_a, usd_try_s),
         "eur_try": doviz(eur_try_a, eur_try_s),
         "usd_eur": doviz(usd_eur_a, usd_eur_s),
-        "kaynak": "yedek",
+        "kaynak":  "yedek",
     }
 
 
@@ -153,41 +151,44 @@ def get_prices() -> dict:
         return get_prices_yedek()
 
 
-def fmt_altin(label: str, emoji: str, p: dict) -> str:
-    ok = "📈" if p["degisim"] >= 0 else "📉"
-    sign = "+" if p["degisim"] >= 0 else ""
-    return (
-        f"{emoji} <b>{label}</b>\n"
-        f"📥 Alış: {p['alis']:,.2f} ₺\n"
-        f"📤 Satış: {p['satis']:,.2f} ₺\n"
-        f"{ok} Değişim: {sign}{p['degisim']:,.2f} ₺ ({sign}{p['pct']:.2f}%)\n"
-    )
-
-
-def fmt_doviz(label: str, emoji: str, p: dict) -> str:
-    ok = "📈" if p["degisim"] >= 0 else "📉"
-    sign = "+" if p["degisim"] >= 0 else ""
-    return (
-        f"{emoji} <b>{label}</b>\n"
-        f"📥 Alış: {p['alis']:,.4f}\n"
-        f"📤 Satış: {p['satis']:,.4f}\n"
-        f"{ok} Değişim: {sign}{p['degisim']:,.4f} ({sign}{p['pct']:.2f}%)\n"
-    )
-
-
 def format_message(prices: dict) -> str:
-    now = datetime.now(TZ).strftime("%H:%M — Harem Altın")
-    msg = ""
-    msg += fmt_altin("Gram Altın", "🥇", prices["gram"])
-    msg += "\n"
-    msg += fmt_altin("Ons Altın",  "🏅", prices["ons"])
-    msg += "\n"
-    msg += fmt_doviz("USD/TRY", "🇺🇸", prices["usd_try"])
-    msg += "\n"
-    msg += fmt_doviz("EUR/TRY", "🇪🇺", prices["eur_try"])
-    msg += "\n"
-    msg += fmt_doviz("USD/EUR", "💱", prices["usd_eur"])
-    msg += f"\n🕐 {now}"
+    now = datetime.now(TZ).strftime("%H:%M  %d.%m.%Y")
+
+    def trend(d):
+        return "📈" if d >= 0 else "📉"
+
+    def sgn(d):
+        return "+" if d >= 0 else ""
+
+    g = prices["gram"]
+    o = prices["ons"]
+    u = prices["usd_try"]
+    e = prices["eur_try"]
+    ue = prices["usd_eur"]
+
+    msg = (
+        f"🕐 <b>{now}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🥇 <b>Gram Altın</b>\n"
+        f"   A: <b>{g['alis']:,.2f} ₺</b>  •  S: <b>{g['satis']:,.2f} ₺</b>\n"
+        f"   {trend(g['degisim'])} {sgn(g['degisim'])}{g['degisim']:,.2f} ₺  ({sgn(g['pct'])}{g['pct']:.2f}%)\n"
+        f"\n"
+        f"🏅 <b>Ons Altın</b>\n"
+        f"   A: <b>{o['alis']:,.2f} ₺</b>  •  S: <b>{o['satis']:,.2f} ₺</b>\n"
+        f"   {trend(o['degisim'])} {sgn(o['degisim'])}{o['degisim']:,.2f} ₺  ({sgn(o['pct'])}{o['pct']:.2f}%)\n"
+        f"\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"🇺🇸 <b>USD/TRY</b>   A: <b>{u['alis']:,.4f}</b>  •  S: <b>{u['satis']:,.4f}</b>\n"
+        f"   {trend(u['degisim'])} {sgn(u['degisim'])}{u['degisim']:,.4f}  ({sgn(u['pct'])}{u['pct']:.2f}%)\n"
+        f"\n"
+        f"🇪🇺 <b>EUR/TRY</b>   A: <b>{e['alis']:,.4f}</b>  •  S: <b>{e['satis']:,.4f}</b>\n"
+        f"   {trend(e['degisim'])} {sgn(e['degisim'])}{e['degisim']:,.4f}  ({sgn(e['pct'])}{e['pct']:.2f}%)\n"
+        f"\n"
+        f"💱 <b>USD/EUR</b>   A: <b>{ue['alis']:,.4f}</b>  •  S: <b>{ue['satis']:,.4f}</b>\n"
+        f"   {trend(ue['degisim'])} {sgn(ue['degisim'])}{ue['degisim']:,.4f}  ({sgn(ue['pct'])}{ue['pct']:.2f}%)\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"📡 Kaynak: Harem Altın"
+    )
     return msg
 
 
@@ -217,7 +218,6 @@ async def subscribe_and_show(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         prices = get_prices()
         msg = format_message(prices)
-
         if yeni:
             bilgi = (
                 f"✅ <b>Abone oldunuz!</b> Her <b>{INTERVAL_MINUTES} dakikada</b> bir otomatik fiyat alacaksınız.\n"
@@ -273,12 +273,11 @@ async def dur_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         prices = get_prices()
-        keys = list(prices.keys())
         kaynak = prices.get("kaynak", "?")
         await update.message.reply_text(
             f"🔧 <b>Debug — {VERSIYON}</b>\n"
             f"Kaynak: {kaynak}\n"
-            f"Anahtarlar: {keys}",
+            f"Abone: {len(subscribers)}",
             parse_mode="HTML",
         )
     except Exception as e:
@@ -296,10 +295,10 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("start",    start_command))
     app.add_handler(CommandHandler("fiyatlar", fiyatlar_command))
-    app.add_handler(CommandHandler("dur", dur_command))
-    app.add_handler(CommandHandler("debug", debug_command))
+    app.add_handler(CommandHandler("dur",      dur_command))
+    app.add_handler(CommandHandler("debug",    debug_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, metin_handler))
 
     job_queue = app.job_queue
@@ -308,7 +307,7 @@ def main():
         interval=INTERVAL_MINUTES * 60,
         first=10,
     )
-    logger.info("Bot başlatıldı — her %d dakikada bir fiyat gönderiliyor", INTERVAL_MINUTES)
+    logger.info("Bot başlatıldı %s — her %d dakikada bir fiyat gönderiliyor", VERSIYON, INTERVAL_MINUTES)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
