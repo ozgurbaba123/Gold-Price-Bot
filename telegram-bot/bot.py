@@ -20,7 +20,7 @@ TIMEZONE = os.getenv("TIMEZONE", "Europe/Istanbul")
 SUBSCRIBERS_FILE = "subscribers.json"
 
 TZ = pytz.timezone(TIMEZONE)
-VERSIYON = "v4.3"
+VERSIYON = "v4.4"
 
 subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
@@ -31,8 +31,7 @@ def load_subscribers():
     if os.path.exists(SUBSCRIBERS_FILE):
         try:
             with open(SUBSCRIBERS_FILE) as f:
-                data = json.load(f)
-                subscribers.update(str(cid) for cid in data)
+                subscribers.update(str(cid) for cid in json.load(f))
         except Exception:
             pass
 
@@ -49,9 +48,9 @@ def parse_price(val: str) -> float:
     return float(val.replace(".", "").replace(",", ".").replace("$", "").strip())
 
 
-def doviz_item(a_, s_):
-    deg = s_ - a_
-    return {"alis": a_, "satis": s_, "degisim": deg, "pct": (deg / a_ * 100) if a_ else 0}
+def make_item(alis: float, satis: float) -> dict:
+    deg = satis - alis
+    return {"alis": alis, "satis": satis, "degisim": deg, "pct": (deg / alis * 100) if alis else 0}
 
 
 def get_prices_haremaltin() -> dict:
@@ -70,95 +69,61 @@ def get_prices_haremaltin() -> dict:
     )
     resp.raise_for_status()
     raw = resp.json()
-    a = raw["data"]
+    if "data" not in raw:
+        raise ValueError("Haremaltin yaniti gecersiz")
 
-    logger.info("Haremaltin API anahtarlari: %s", list(a.keys()))
+    a = raw["data"]
 
     def item(key):
         d = a[key]
-        alis = float(d["alis"])
-        satis = float(d["satis"])
-        deg = satis - alis
-        pct = (deg / alis * 100) if alis else 0
-        return {"alis": alis, "satis": satis, "degisim": deg, "pct": pct}
+        return make_item(float(d["alis"]), float(d["satis"]))
 
     gram = item("ALTIN")
 
     try:
         ons = item("ONS")
     except Exception:
-        ons = doviz_item(gram["alis"] * 31.1035, gram["satis"] * 31.1035)
+        ons = make_item(gram["alis"] * 31.1035, gram["satis"] * 31.1035)
 
-    # Döviz — birden fazla olası anahtar adı deneniyor
-    def get_doviz_pair(key_try):
-        for k in key_try:
-            try:
-                d = a[k]
-                return float(d["alis"]), float(d["satis"])
-            except Exception:
-                continue
-        raise KeyError(f"Hiçbir anahtar bulunamadı: {key_try}")
+    usd_try = make_item(float(a["USDTRY"]["alis"]), float(a["USDTRY"]["satis"]))
+    eur_try = make_item(float(a["EURTRY"]["alis"]), float(a["EURTRY"]["satis"]))
+    usd_eur = make_item(usd_try["alis"] / eur_try["alis"], usd_try["satis"] / eur_try["satis"])
 
-    usd_try_a, usd_try_s = get_doviz_pair(["USDTRY", "USD_TRY", "USD/TRY", "usdtry"])
-    eur_try_a, eur_try_s = get_doviz_pair(["EURTRY", "EUR_TRY", "EUR/TRY", "eurtry"])
-    usd_eur_a = usd_try_a / eur_try_a
-    usd_eur_s = usd_try_s / eur_try_s
-
-    return {
-        "gram":    gram,
-        "ons":     ons,
-        "usd_try": doviz_item(usd_try_a, usd_try_s),
-        "eur_try": doviz_item(eur_try_a, eur_try_s),
-        "usd_eur": doviz_item(usd_eur_a, usd_eur_s),
-        "kaynak":  "haremaltin.com",
-    }
+    return {"gram": gram, "ons": ons, "usd_try": usd_try, "eur_try": eur_try, "usd_eur": usd_eur, "kaynak": "Harem Altın"}
 
 
 def get_prices_yedek() -> dict:
-    data = requests.get(
+    resp = requests.get(
         "https://finans.truncgil.com/today.json",
         headers={"User-Agent": "Mozilla/5.0"},
         timeout=10,
-    ).json()
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     def item(key):
-        alis = parse_price(data[key]["Alış"])
-        satis = parse_price(data[key]["Satış"])
-        deg = satis - alis
-        pct = (deg / alis * 100) if alis else 0
-        return {"alis": alis, "satis": satis, "degisim": deg, "pct": pct}
+        return make_item(parse_price(data[key]["Alış"]), parse_price(data[key]["Satış"]))
 
-    usd_try_a = parse_price(data["USD"]["Alış"])
-    usd_try_s = parse_price(data["USD"]["Satış"])
-    eur_try_a = parse_price(data["EUR"]["Alış"])
-    eur_try_s = parse_price(data["EUR"]["Satış"])
-    usd_eur_a = usd_try_a / eur_try_a
-    usd_eur_s = usd_try_s / eur_try_s
+    gram = item("gram-altin")
+    ons = item("ons")
+    usd_try = make_item(parse_price(data["USD"]["Alış"]), parse_price(data["USD"]["Satış"]))
+    eur_try = make_item(parse_price(data["EUR"]["Alış"]), parse_price(data["EUR"]["Satış"]))
+    usd_eur = make_item(usd_try["alis"] / eur_try["alis"], usd_try["satis"] / eur_try["satis"])
 
-    return {
-        "gram":    item("gram-altin"),
-        "ons":     item("ons"),
-        "usd_try": doviz_item(usd_try_a, usd_try_s),
-        "eur_try": doviz_item(eur_try_a, eur_try_s),
-        "usd_eur": doviz_item(usd_eur_a, usd_eur_s),
-        "kaynak":  "yedek",
-    }
+    return {"gram": gram, "ons": ons, "usd_try": usd_try, "eur_try": eur_try, "usd_eur": usd_eur, "kaynak": "Güncel Kur"}
 
 
 def get_prices() -> dict:
     try:
-        prices = get_prices_haremaltin()
-        logger.info("Fiyatlar haremaltin.com'dan alındı")
-        return prices
+        p = get_prices_haremaltin()
+        logger.info("Haremaltin'den alindi")
+        return p
     except Exception as e:
-        logger.warning("Haremaltin erişilemedi (%s), yedek kaynak deneniyor", e)
-        try:
-            prices = get_prices_yedek()
-            logger.info("Yedek kaynaktan alındı")
-            return prices
-        except Exception as e2:
-            logger.error("Yedek kaynak da başarısız: %s", e2)
-            raise
+        logger.warning("Haremaltin basarisiz (%s), yedek deneniyor", e)
+
+    p = get_prices_yedek()
+    logger.info("Yedek kaynaktan alindi")
+    return p
 
 
 def fmt_altin(label: str, emoji: str, p: dict) -> str:
@@ -184,18 +149,19 @@ def fmt_doviz(label: str, emoji: str, p: dict) -> str:
 
 
 def format_message(prices: dict) -> str:
-    now = datetime.now(TZ).strftime("%H:%M — Harem Altın")
+    now = datetime.now(TZ).strftime("%H:%M — %d.%m.%Y")
+    kaynak = prices.get("kaynak", "")
     msg = ""
     msg += fmt_altin("Gram Altın", "🥇", prices["gram"])
     msg += "\n"
-    msg += fmt_altin("Ons Altın",  "🏅", prices["ons"])
+    msg += fmt_altin("Ons Altın", "🏅", prices["ons"])
     msg += "\n"
     msg += fmt_doviz("USD/TRY", "🇺🇸", prices["usd_try"])
     msg += "\n"
     msg += fmt_doviz("EUR/TRY", "🇪🇺", prices["eur_try"])
     msg += "\n"
-    msg += fmt_doviz("USD/EUR", "💱",  prices["usd_eur"])
-    msg += f"\n🕐 {now} • {VERSIYON}"
+    msg += fmt_doviz("USD/EUR", "💱", prices["usd_eur"])
+    msg += f"\n🕐 {now} | {kaynak}"
     return msg
 
 
@@ -210,9 +176,9 @@ async def send_prices_to_all(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
             except Exception as e:
                 logger.warning("Gönderilemedi %s: %s", chat_id, e)
-        logger.info("Fiyatlar gönderildi: %d sohbet", len(subscribers))
+        logger.info("Gönderildi: %d sohbet", len(subscribers))
     except Exception as e:
-        logger.error("Fiyat gönderme hatası: %s", e)
+        logger.error("Gönderme hatası: %s", e)
 
 
 async def subscribe_and_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -221,41 +187,36 @@ async def subscribe_and_show(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if yeni:
         subscribers.add(chat_id)
         save_subscribers()
-
     try:
         prices = get_prices()
         msg = format_message(prices)
-        if yeni:
-            bilgi = (
-                f"✅ <b>Abone oldunuz!</b> Her <b>{INTERVAL_MINUTES} dakikada</b> bir otomatik fiyat alacaksınız.\n"
-                f"Durdurmak için /dur yazın.\n\n"
-            )
-        else:
-            bilgi = f"✅ Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat alıyorsunuz.\n\n"
-
+        bilgi = (
+            f"✅ <b>Abone oldunuz!</b> Her <b>{INTERVAL_MINUTES} dakikada</b> bir otomatik fiyat alacaksınız.\n"
+            f"Durdurmak için /dur yazın.\n\n"
+        ) if yeni else (
+            f"✅ Zaten abonesiniz. Her <b>{INTERVAL_MINUTES} dakikada</b> bir fiyat alıyorsunuz.\n\n"
+        )
         await update.message.reply_text(bilgi + msg, parse_mode="HTML")
     except Exception as e:
-        logger.error("Abone fiyat hatası: %s", e)
+        logger.error("Abone hatası: %s", e)
         await update.message.reply_text("❌ Fiyatlar alınamadı, lütfen tekrar deneyin.")
 
 
 async def fiyatlar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        prices = get_prices()
-        await update.message.reply_text(format_message(prices), parse_mode="HTML")
+        await update.message.reply_text(format_message(get_prices()), parse_mode="HTML")
     except Exception as e:
-        logger.error("Komut hatası: %s", e)
-        await update.message.reply_text("❌ Fiyatlar alınamadı, lütfen tekrar deneyin.")
+        logger.error("Fiyatlar hatası: %s", e)
+        await update.message.reply_text("❌ Fiyatlar alınamadı.")
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 <b>Altın & Döviz Fiyatları Botuna Hoş Geldiniz!</b>\n\n"
         f"<b>Komutlar:</b>\n"
-        f"• <b>abone</b> veya /abone — Abone ol ve anlık fiyatları gör\n"
+        f"• /abone veya <b>abone</b> — Abone ol\n"
         f"• /fiyatlar — Anlık fiyatları göster\n"
-        f"• /dur — Otomatik güncellemeleri durdur\n"
-        f"• /start — Bu mesajı göster",
+        f"• /dur — Otomatik güncellemeleri durdur",
         parse_mode="HTML",
     )
 
@@ -265,25 +226,17 @@ async def dur_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in subscribers:
         subscribers.discard(chat_id)
         save_subscribers()
-        await update.message.reply_text(
-            "🔕 Otomatik güncellemeler durduruldu.\n"
-            "Tekrar başlatmak için <b>abone</b> yazın.",
-            parse_mode="HTML",
-        )
+        await update.message.reply_text("🔕 Durduruldu. Tekrar başlatmak için /abone yazın.")
     else:
-        await update.message.reply_text(
-            "Zaten abone değilsiniz. <b>abone</b> yazarak abone olabilirsiniz.",
-            parse_mode="HTML",
-        )
+        await update.message.reply_text("Zaten abone değilsiniz.")
 
 
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         prices = get_prices()
-        kaynak = prices.get("kaynak", "?")
         await update.message.reply_text(
-            f"🔧 <b>Debug — {VERSIYON}</b>\n"
-            f"Kaynak: {kaynak}\n"
+            f"🔧 <b>{VERSIYON}</b>\n"
+            f"Kaynak: {prices['kaynak']}\n"
             f"Gram: {prices['gram']['satis']:,.2f} ₺\n"
             f"USD/TRY: {prices['usd_try']['satis']:,.4f}\n"
             f"EUR/TRY: {prices['eur_try']['satis']:,.4f}\n"
@@ -295,14 +248,12 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def metin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    metin = (update.message.text or "").strip().lower()
-    if metin == "abone":
+    if (update.message.text or "").strip().lower() == "abone":
         await subscribe_and_show(update, context)
 
 
 def main():
     load_subscribers()
-
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start",    start_command))
@@ -312,13 +263,9 @@ def main():
     app.add_handler(CommandHandler("debug",    debug_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, metin_handler))
 
-    job_queue = app.job_queue
-    job_queue.run_repeating(
-        send_prices_to_all,
-        interval=INTERVAL_MINUTES * 60,
-        first=10,
-    )
-    logger.info("Bot başlatıldı %s — her %d dakikada bir fiyat gönderiliyor", VERSIYON, INTERVAL_MINUTES)
+    app.job_queue.run_repeating(send_prices_to_all, interval=INTERVAL_MINUTES * 60, first=10)
+
+    logger.info("Bot %s baslatildi — her %d dakikada bir", VERSIYON, INTERVAL_MINUTES)
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
