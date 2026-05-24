@@ -56,7 +56,10 @@ function formatPrice(price: GoldPrice, rates?: ForexRate[], intervalLabel?: stri
     const rateMap = new Map(rates.map((r) => [r.pair, r]));
     const usd = rateMap.get("USD/TRY");
     const eur = rateMap.get("EUR/TRY");
-    const eurusd = rateMap.get("EUR/USD");
+    const eurusdDirect = rateMap.get("EUR/USD");
+    const eurusd = eurusdDirect ?? (usd && eur
+      ? { alis: parseFloat((eur.alis / usd.satis).toFixed(4)), satis: parseFloat((eur.satis / usd.alis).toFixed(4)) }
+      : null);
     if (usd) {
       msg += `\n🇺🇸 *USD/TRY*\n` +
         `📥 Alış: *${formatTR(usd.alis, 2)}*\n` +
