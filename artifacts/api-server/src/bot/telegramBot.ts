@@ -32,14 +32,14 @@ function formatTime(timestamp: Date): string {
   });
 }
 
-function formatPrice(price: GoldPrice, intervalLabel?: string): string {
+function formatPrice(price: GoldPrice, rates?: ForexRate[], intervalLabel?: string): string {
   const arrow = price.change > 0 ? "📈" : price.change < 0 ? "📉" : "➡️";
   const changeSign = price.change > 0 ? "+" : "";
   const time = formatTime(price.timestamp);
   const hasGramSpread = Math.abs(price.alis - price.satis) > 0.01;
   const hasOnsSpread = Math.abs(price.onsAlis - price.onsSatis) > 0.01;
 
-  return (
+  let msg =
     `🥇 *Gram Altın*\n` +
     (hasGramSpread
       ? `📥 Alış: *${formatTR(price.alis)} ₺*\n` +
@@ -50,10 +50,33 @@ function formatPrice(price: GoldPrice, intervalLabel?: string): string {
     (hasOnsSpread
       ? `📥 Alış: *${formatTR(price.onsAlis)} ₺*\n` +
         `📤 Satış: *${formatTR(price.onsSatis)} ₺*\n`
-      : `💰 Fiyat: *${formatTR(price.onsTL)} ₺*\n`) +
-    `\n🕐 ${time}` +
-    (intervalLabel ? ` — _${intervalLabel}_` : ` — _${price.source}_`)
-  );
+      : `💰 Fiyat: *${formatTR(price.onsTL)} ₺*\n`);
+
+  if (rates && rates.length > 0) {
+    const rateMap = new Map(rates.map((r) => [r.pair, r]));
+    const usd = rateMap.get("USD/TRY");
+    const eur = rateMap.get("EUR/TRY");
+    const eurusd = rateMap.get("EUR/USD");
+    if (usd) {
+      msg += `\n🇺🇸 *USD/TRY*\n` +
+        `📥 Alış: *${formatTR(usd.alis, 2)}*\n` +
+        `📤 Satış: *${formatTR(usd.satis, 2)}*\n`;
+    }
+    if (eur) {
+      msg += `\n🇪🇺 *EUR/TRY*\n` +
+        `📥 Alış: *${formatTR(eur.alis, 2)}*\n` +
+        `📤 Satış: *${formatTR(eur.satis, 2)}*\n`;
+    }
+    if (eurusd) {
+      msg += `\n💶 *EUR/USD*\n` +
+        `📥 Alış: *${formatTR(eurusd.alis, 4)}*\n` +
+        `📤 Satış: *${formatTR(eurusd.satis, 4)}*\n`;
+    }
+  }
+
+  msg += `\n🕐 ${time}` +
+    (intervalLabel ? ` — _${intervalLabel}_` : ` — _${price.source}_`);
+  return msg;
 }
 
 function formatGramOnly(price: GoldPrice): string {
@@ -147,8 +170,8 @@ function intervalKeyboard(): TelegramBot.InlineKeyboardMarkup {
 async function sendCurrentPrice(chatId: number): Promise<void> {
   if (!bot) return;
   try {
-    const price = await fetchGoldPrice();
-    await bot.sendMessage(chatId, formatPrice(price), { parse_mode: "Markdown" });
+    const [price, rates] = await Promise.all([fetchGoldPrice(), fetchForexRates().catch(() => [])]);
+    await bot.sendMessage(chatId, formatPrice(price, rates as ForexRate[]), { parse_mode: "Markdown" });
   } catch {
     logger.warn({ chatId }, "İlk fiyat gönderilemedi");
   }
@@ -263,8 +286,8 @@ export function initBot(): void {
     const chatId = msg.chat.id;
     const loadingMsg = await bot!.sendMessage(chatId, "⏳ Fiyat alınıyor...");
     try {
-      const price = await fetchGoldPrice();
-      await bot!.editMessageText(formatPrice(price), {
+      const [price, rates] = await Promise.all([fetchGoldPrice(), fetchForexRates().catch(() => [])]);
+      await bot!.editMessageText(formatPrice(price, rates as ForexRate[]), {
         chat_id: chatId,
         message_id: loadingMsg.message_id,
         parse_mode: "Markdown",
@@ -461,12 +484,12 @@ export function initBot(): void {
     logger.info({ count: due.length }, "Cron: bildirim gönderilecek aboneler");
 
     try {
-      const price = await fetchGoldPrice();
+      const [price, rates] = await Promise.all([fetchGoldPrice(), fetchForexRates().catch(() => [])]);
 
       await Promise.allSettled(
         due.map(async (sub) => {
           const label = INTERVALS[String(sub.intervalMinutes)]?.label;
-          const message = formatPrice(price, label);
+          const message = formatPrice(price, rates as ForexRate[], label);
           try {
             await bot!.sendMessage(sub.chatId, message, { parse_mode: "Markdown" });
             markNotified(sub.chatId);
