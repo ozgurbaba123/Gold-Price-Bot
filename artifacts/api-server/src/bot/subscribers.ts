@@ -1,3 +1,5 @@
+import { upsertToDb, deleteFromDb, updateLastNotifiedDb } from "./subscriberDb.js";
+
 export interface Subscriber {
   chatId: number;
   intervalMinutes: number;
@@ -6,6 +8,12 @@ export interface Subscriber {
 
 const subscribers = new Map<number, Subscriber>();
 
+export function loadSubscribers(list: Subscriber[]): void {
+  for (const s of list) {
+    subscribers.set(s.chatId, s);
+  }
+}
+
 export function setSubscriber(chatId: number, intervalMinutes: number): "new" | "updated" {
   const existing = subscribers.get(chatId);
   subscribers.set(chatId, {
@@ -13,11 +21,14 @@ export function setSubscriber(chatId: number, intervalMinutes: number): "new" | 
     intervalMinutes,
     lastNotified: existing?.lastNotified ?? null,
   });
+  void upsertToDb(chatId, intervalMinutes);
   return existing ? "updated" : "new";
 }
 
 export function removeSubscriber(chatId: number): boolean {
-  return subscribers.delete(chatId);
+  const removed = subscribers.delete(chatId);
+  if (removed) void deleteFromDb(chatId);
+  return removed;
 }
 
 export function getSubscriber(chatId: number): Subscriber | undefined {
@@ -38,7 +49,10 @@ export function subscriberCount(): number {
 
 export function markNotified(chatId: number): void {
   const sub = subscribers.get(chatId);
-  if (sub) sub.lastNotified = new Date();
+  if (sub) {
+    sub.lastNotified = new Date();
+    void updateLastNotifiedDb(chatId);
+  }
 }
 
 export function getDueSubscribers(): Subscriber[] {
