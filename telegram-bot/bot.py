@@ -15,9 +15,10 @@ INTERVAL_MINUTES = int(os.getenv("INTERVAL_MINUTES", "30"))
 PORT             = int(os.getenv("PORT", "8080"))
 TZ               = pytz.timezone(os.getenv("TIMEZONE", "Europe/Istanbul"))
 SUBSCRIBERS_FILE = "subscribers.json"
-VERSIYON         = "v5.2"
+VERSIYON         = "v5.3"
 
 subscribers: set[str] = set(c.strip() for c in CHAT_IDS_RAW.split(",") if c.strip())
+_conflict_seen   = threading.Event()   # error handler → main loop haberleşmesi
 
 def load_subs():
     if os.path.exists(SUBSCRIBERS_FILE):
@@ -36,9 +37,9 @@ def save_subs():
 def parse_price(v: str) -> float:
     return float(v.replace(".", "").replace(",", ".").replace("$", "").strip())
 
-def make_item(alis: float, satis: float) -> dict:
-    d = satis - alis
-    return {"alis": alis, "satis": satis, "d": d, "pct": d / alis * 100 if alis else 0}
+def make_item(a: float, s: float) -> dict:
+    d = s - a
+    return {"alis": a, "satis": s, "d": d, "pct": d / a * 100 if a else 0}
 
 def get_prices() -> dict:
     # --- Haremaltin ---
@@ -57,45 +58,37 @@ def get_prices() -> dict:
         r.raise_for_status()
         raw = r.json()
         if "data" not in raw:
-            raise ValueError("data anahtari yok")
+            raise ValueError("data yok")
         a = raw["data"]
         logger.info("Haremaltin anahtarlari: %s", list(a.keys())[:15])
-
         def hi(k): return make_item(float(a[k]["alis"]), float(a[k]["satis"]))
-
         gram = hi("ALTIN")
         ons  = hi("ONS")
-
-        # USD/EUR — farkli anahtar adlarini dene
-        def find_key(candidates):
+        def find(candidates):
             for c in candidates:
                 if c in a: return c
-            raise KeyError(f"Hic biri bulunamadi: {candidates}")
-
-        usd_key = find_key(["USDTRY", "USD_TRY", "USD"])
-        eur_key = find_key(["EURTRY", "EUR_TRY", "EUR"])
-        usd = make_item(float(a[usd_key]["alis"]), float(a[usd_key]["satis"]))
-        eur = make_item(float(a[eur_key]["alis"]), float(a[eur_key]["satis"]))
+            raise KeyError(f"Bulunamadi: {candidates}")
+        uk = find(["USDTRY", "USD_TRY", "USD"])
+        ek = find(["EURTRY", "EUR_TRY", "EUR"])
+        usd = make_item(float(a[uk]["alis"]), float(a[uk]["satis"]))
+        eur = make_item(float(a[ek]["alis"]), float(a[ek]["satis"]))
         usdeur = make_item(usd["alis"] / eur["alis"], usd["satis"] / eur["satis"])
-        logger.info("Haremaltin OK — USD:%s EUR:%s", usd_key, eur_key)
+        logger.info("Haremaltin OK (USD=%s EUR=%s)", uk, ek)
         return {"gram": gram, "ons": ons, "usd": usd, "eur": eur, "usdeur": usdeur, "src": "Harem Altin"}
     except Exception as e:
-        logger.warning("Haremaltin basarisiz: %s", e)
+        logger.warning("Haremaltin fail: %s", e)
 
-    # --- Yedek (finans.truncgil.com) ---
+    # --- Yedek ---
     try:
         r = requests.get("https://finans.truncgil.com/today.json",
                          headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         r.raise_for_status()
         data = r.json()
-        logger.info("Yedek anahtarlari: %s", list(data.keys())[:10])
-
         def yi(key):
             obj = data[key]
             alis  = parse_price(next(v for k, v in obj.items() if k[:2] == "Al"))
             satis = parse_price(next(v for k, v in obj.items() if k[:2] == "Sa"))
             return make_item(alis, satis)
-
         gram   = yi("gram-altin")
         ons    = yi("ons")
         usd    = yi("USD")
@@ -104,10 +97,10 @@ def get_prices() -> dict:
         logger.info("Yedek OK")
         return {"gram": gram, "ons": ons, "usd": usd, "eur": eur, "usdeur": usdeur, "src": "Guncel Kur"}
     except Exception as e:
-        logger.error("Yedek de basarisiz: %s", e)
+        logger.error("Yedek de fail: %s", e)
         raise
 
-def row_altin(label, emoji, p):
+def row_a(label, emoji, p):
     ok = "\U0001f4c8" if p["d"] >= 0 else "\U0001f4c9"
     s  = "+" if p["d"] >= 0 else ""
     return (f"{emoji} <b>{label}</b>\n"
@@ -115,7 +108,7 @@ def row_altin(label, emoji, p):
             f"\U0001f4e4 Satis: {p['satis']:,.2f} \u20ba\n"
             f"{ok} Degisim: {s}{p['d']:,.2f} \u20ba ({s}{p['pct']:.2f}%)\n")
 
-def row_doviz(label, emoji, p):
+def row_d(label, emoji, p):
     ok = "\U0001f4c8" if p["d"] >= 0 else "\U0001f4c9"
     s  = "+" if p["d"] >= 0 else ""
     return (f"{emoji} <b>{label}</b>\n"
@@ -123,14 +116,14 @@ def row_doviz(label, emoji, p):
             f"\U0001f4e4 Satis: {p['satis']:,.4f}\n"
             f"{ok} Degisim: {s}{p['d']:,.4f} ({s}{p['pct']:.2f}%)\n")
 
-def fmt(prices):
+def fmt(p):
     now = datetime.now(TZ).strftime("%H:%M \u2014 %d.%m.%Y")
-    msg  = row_altin("Gram Altin",  "\U0001f947", prices["gram"])       + "\n"
-    msg += row_altin("Ons Altin",   "\U0001f3c5", prices["ons"])        + "\n"
-    msg += row_doviz("USD/TRY", "\U0001f1fa\U0001f1f8", prices["usd"]) + "\n"
-    msg += row_doviz("EUR/TRY", "\U0001f1ea\U0001f1fa", prices["eur"]) + "\n"
-    msg += row_doviz("USD/EUR", "\U0001f4b1",             prices["usdeur"])
-    msg += f"\n\U0001f550 {now} | {prices['src']} | {VERSIYON}"
+    msg  = row_a("Gram Altin", "\U0001f947", p["gram"]) + "\n"
+    msg += row_a("Ons Altin",  "\U0001f3c5", p["ons"])  + "\n"
+    msg += row_d("USD/TRY", "\U0001f1fa\U0001f1f8", p["usd"])    + "\n"
+    msg += row_d("EUR/TRY", "\U0001f1ea\U0001f1fa", p["eur"])    + "\n"
+    msg += row_d("USD/EUR", "\U0001f4b1",             p["usdeur"])
+    msg += f"\n\U0001f550 {now} | {p['src']} | {VERSIYON}"
     return msg
 
 async def send_all(context: ContextTypes.DEFAULT_TYPE):
@@ -141,7 +134,7 @@ async def send_all(context: ContextTypes.DEFAULT_TYPE):
             try: await context.bot.send_message(cid, msg, parse_mode="HTML")
             except Exception as e: logger.warning("send %s: %s", cid, e)
     except Exception as e:
-        logger.error("send_all hatasi: %s\n%s", e, traceback.format_exc())
+        logger.error("send_all: %s", e)
 
 async def cmd_abone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cid = str(update.effective_chat.id)
@@ -154,9 +147,9 @@ async def cmd_abone(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"\u2705 Zaten abonesiniz ({INTERVAL_MINUTES} dk).\n\n"
         await update.message.reply_text(info + msg, parse_mode="HTML")
     except Exception as e:
-        tb = traceback.format_exc()[-500:]
+        tb = traceback.format_exc()[-400:]
         await update.message.reply_text(
-            f"\u274c {VERSIYON} HATA\n{type(e).__name__}: {e}\n\n<pre>{tb}</pre>",
+            f"\u274c {VERSIYON} HATA\n{type(e).__name__}: {e}\n<pre>{tb}</pre>",
             parse_mode="HTML")
 
 async def cmd_fiyatlar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -168,14 +161,14 @@ async def cmd_fiyatlar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"\U0001f44b <b>Altin & Doviz Botu</b> ({VERSIYON})\n\n"
-        "/abone \u2014 Abone ol\n/fiyatlar \u2014 Anlik fiyat\n/dur \u2014 Durdur\n/debug \u2014 Durum",
+        "/abone \u2014 Abone ol\n/fiyatlar \u2014 Anlik fiyat\n/dur \u2014 Durdur",
         parse_mode="HTML")
 
 async def cmd_dur(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cid = str(update.effective_chat.id)
     if cid in subscribers:
         subscribers.discard(cid); save_subs()
-        await update.message.reply_text("\U0001f515 Durduruldu. /abone ile yeniden baslatabilirsiniz.")
+        await update.message.reply_text("\U0001f515 Durduruldu.")
     else:
         await update.message.reply_text("Abone degilsiniz.")
 
@@ -184,17 +177,29 @@ async def cmd_debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p = get_prices()
         await update.message.reply_text(
             f"\U0001f527 <b>{VERSIYON}</b>\nKaynak: {p['src']}\n"
-            f"Gram: {p['gram']['satis']:,.2f} \u20ba\nOns: {p['ons']['satis']:,.2f} \u20ba\n"
+            f"Gram: {p['gram']['satis']:,.2f}\nOns: {p['ons']['satis']:,.2f}\n"
             f"USD/TRY: {p['usd']['satis']:,.4f}\nEUR/TRY: {p['eur']['satis']:,.4f}\n"
             f"USD/EUR: {p['usdeur']['satis']:,.4f}\nAbone: {len(subscribers)}",
             parse_mode="HTML")
     except Exception as e:
-        await update.message.reply_text(f"\u274c {VERSIYON}: {type(e).__name__}: {e}")
+        await update.message.reply_text(f"\u274c {VERSIYON}: {e}")
 
 async def metin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (update.message.text or "").strip().lower() == "abone":
         await cmd_abone(update, context)
 
+# ── KRITIK: Conflict error handler ───────────────────────────────────────────
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    err = context.error
+    if isinstance(err, Conflict):
+        logger.warning("Conflict algilandi — uygulama durduruluyor")
+        _conflict_seen.set()
+        # Application'i durdur → run_polling() geri doner
+        context.application.stop_running()
+    else:
+        logger.error("Beklenmedik hata: %s", err)
+
+# ── HTTP health server ─────────────────────────────────────────────────────
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
@@ -211,30 +216,38 @@ def build_app():
     app.add_handler(CommandHandler("dur",      cmd_dur))
     app.add_handler(CommandHandler("debug",    cmd_debug))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, metin))
+    app.add_error_handler(error_handler)   # Conflict'i yakala
     app.job_queue.run_repeating(send_all, interval=INTERVAL_MINUTES * 60, first=10)
     return app
 
 def main():
     load_subs()
     threading.Thread(target=health_server, daemon=True).start()
-    logger.info("Health server basladi — port %d | %s", PORT, VERSIYON)
+    logger.info("Health server basladi port=%d | %s", PORT, VERSIYON)
 
     attempt = 0
     while True:
         attempt += 1
+        _conflict_seen.clear()
+
         if attempt > 1:
             wait = min(30 * (attempt - 1), 120)
-            logger.info("Deneme %d — %ds bekleniyor...", attempt, wait)
+            logger.info("Deneme %d — %ds bekleniyor (eski instance kapansin)", attempt, wait)
             time.sleep(wait)
+
         try:
-            app = build_app()          # HER DENEMEDE yeni app nesnesi
+            app = build_app()
             logger.info("Polling basliyor — deneme %d | %s", attempt, VERSIYON)
             app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-            break
-        except Conflict:
-            logger.warning("Conflict — eski instance hala calisiyor")
         except Exception as e:
-            logger.error("Beklenmedik hata (deneme %d): %s\n%s", attempt, e, traceback.format_exc())
+            logger.error("run_polling exception (deneme %d): %s", attempt, e)
+
+        if _conflict_seen.is_set():
+            logger.warning("Conflict nedeniyle yeniden denenecek")
+            continue   # while True → yeni deneme
+        else:
+            logger.info("Normal cikis — bot durdu")
+            break
 
 if __name__ == "__main__":
     main()
