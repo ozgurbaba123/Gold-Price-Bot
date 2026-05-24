@@ -1,4 +1,4 @@
-import os, json, time, logging, threading, traceback, requests
+import os, sys, json, time, logging, threading, traceback, requests
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import pytz
@@ -15,10 +15,10 @@ INTERVAL_MINUTES = int(os.getenv("INTERVAL_MINUTES", "30"))
 PORT             = int(os.getenv("PORT", "8080"))
 TZ               = pytz.timezone(os.getenv("TIMEZONE", "Europe/Istanbul"))
 SUBSCRIBERS_FILE = "subscribers.json"
-VERSIYON         = "v5.3"
+VERSIYON         = "v5.4"
 
 subscribers: set[str] = set(c.strip() for c in CHAT_IDS_RAW.split(",") if c.strip())
-_conflict_seen   = threading.Event()   # error handler → main loop haberleşmesi
+_conflict_seen   = threading.Event()
 
 def load_subs():
     if os.path.exists(SUBSCRIBERS_FILE):
@@ -42,7 +42,6 @@ def make_item(a: float, s: float) -> dict:
     return {"alis": a, "satis": s, "d": d, "pct": d / a * 100 if a else 0}
 
 def get_prices() -> dict:
-    # --- Haremaltin ---
     try:
         r = requests.post(
             "https://www.haremaltin.com/dashboard/ajax/getData",
@@ -60,7 +59,6 @@ def get_prices() -> dict:
         if "data" not in raw:
             raise ValueError("data yok")
         a = raw["data"]
-        logger.info("Haremaltin anahtarlari: %s", list(a.keys())[:15])
         def hi(k): return make_item(float(a[k]["alis"]), float(a[k]["satis"]))
         gram = hi("ALTIN")
         ons  = hi("ONS")
@@ -70,15 +68,14 @@ def get_prices() -> dict:
             raise KeyError(f"Bulunamadi: {candidates}")
         uk = find(["USDTRY", "USD_TRY", "USD"])
         ek = find(["EURTRY", "EUR_TRY", "EUR"])
-        usd = make_item(float(a[uk]["alis"]), float(a[uk]["satis"]))
-        eur = make_item(float(a[ek]["alis"]), float(a[ek]["satis"]))
+        usd    = make_item(float(a[uk]["alis"]), float(a[uk]["satis"]))
+        eur    = make_item(float(a[ek]["alis"]), float(a[ek]["satis"]))
         usdeur = make_item(usd["alis"] / eur["alis"], usd["satis"] / eur["satis"])
         logger.info("Haremaltin OK (USD=%s EUR=%s)", uk, ek)
         return {"gram": gram, "ons": ons, "usd": usd, "eur": eur, "usdeur": usdeur, "src": "Harem Altin"}
     except Exception as e:
         logger.warning("Haremaltin fail: %s", e)
 
-    # --- Yedek ---
     try:
         r = requests.get("https://finans.truncgil.com/today.json",
                          headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
@@ -188,18 +185,14 @@ async def metin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (update.message.text or "").strip().lower() == "abone":
         await cmd_abone(update, context)
 
-# ── KRITIK: Conflict error handler ───────────────────────────────────────────
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    err = context.error
-    if isinstance(err, Conflict):
-        logger.warning("Conflict algilandi — uygulama durduruluyor")
+    if isinstance(context.error, Conflict):
+        logger.warning("Conflict algilandi — 60s bekleyip yeniden baslatilacak")
         _conflict_seen.set()
-        # Application'i durdur → run_polling() geri doner
         context.application.stop_running()
     else:
-        logger.error("Beklenmedik hata: %s", err)
+        logger.error("Hata: %s", context.error)
 
-# ── HTTP health server ─────────────────────────────────────────────────────
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
@@ -216,7 +209,7 @@ def build_app():
     app.add_handler(CommandHandler("dur",      cmd_dur))
     app.add_handler(CommandHandler("debug",    cmd_debug))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, metin))
-    app.add_error_handler(error_handler)   # Conflict'i yakala
+    app.add_error_handler(error_handler)
     app.job_queue.run_repeating(send_all, interval=INTERVAL_MINUTES * 60, first=10)
     return app
 
@@ -225,29 +218,18 @@ def main():
     threading.Thread(target=health_server, daemon=True).start()
     logger.info("Health server basladi port=%d | %s", PORT, VERSIYON)
 
-    attempt = 0
-    while True:
-        attempt += 1
-        _conflict_seen.clear()
+    app = build_app()
+    logger.info("Polling basliyor — %s", VERSIYON)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
-        if attempt > 1:
-            wait = min(30 * (attempt - 1), 120)
-            logger.info("Deneme %d — %ds bekleniyor (eski instance kapansin)", attempt, wait)
-            time.sleep(wait)
+    if _conflict_seen.is_set():
+        # Conflict durumunda: 60s bekle (eski instance olsun), sonra Railway yeniden baslatsin
+        logger.warning("Conflict — 60s bekleniyor, sonra process kapatilacak (Railway yeniden baslatacak)")
+        time.sleep(60)
+        logger.info("Process kapatiliyor — Railway yeniden baslatacak")
+        sys.exit(1)
 
-        try:
-            app = build_app()
-            logger.info("Polling basliyor — deneme %d | %s", attempt, VERSIYON)
-            app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-        except Exception as e:
-            logger.error("run_polling exception (deneme %d): %s", attempt, e)
-
-        if _conflict_seen.is_set():
-            logger.warning("Conflict nedeniyle yeniden denenecek")
-            continue   # while True → yeni deneme
-        else:
-            logger.info("Normal cikis — bot durdu")
-            break
+    logger.info("Bot normal sekilde durdu")
 
 if __name__ == "__main__":
     main()
