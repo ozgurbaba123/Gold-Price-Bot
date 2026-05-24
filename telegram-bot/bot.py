@@ -25,7 +25,7 @@ PORT             = int(os.getenv("PORT", "8080"))
 SUBSCRIBERS_FILE = "subscribers.json"
 
 TZ       = pytz.timezone(TIMEZONE)
-VERSIYON = "v4.9"
+VERSIYON = "v5.0"
 
 subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
@@ -288,16 +288,17 @@ def main():
     attempt = 0
     while True:
         attempt += 1
-        wait = min(15 * attempt, 60)
-        logger.info("%s — deneme %d, %ds bekleniyor", VERSIYON, attempt, wait)
-        time.sleep(wait)
+        wait = 0 if attempt == 1 else min(30 * (attempt - 1), 90)
+        if wait > 0:
+            logger.info("%s — deneme %d, %ds bekleniyor", VERSIYON, attempt, wait)
+            time.sleep(wait)
         try:
             app = build_app()
-            logger.info("Polling baslatildi — %s", VERSIYON)
+            logger.info("Polling baslatildi — %s (deneme %d)", VERSIYON, attempt)
             app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
             break
         except Conflict:
-            logger.warning("Conflict — baska instance calisiyor, %ds sonra yeniden denenecek", min(15*(attempt+1),60))
+            logger.warning("Conflict — eski instance hala calisiyor, 30s sonra yeniden denenecek")
         except Exception as e:
             logger.error("Hata: %s — yeniden denenecek", e)
 
