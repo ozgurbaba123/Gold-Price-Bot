@@ -15,7 +15,7 @@ INTERVAL_MINUTES = int(os.getenv("INTERVAL_MINUTES", "30"))
 PORT             = int(os.getenv("PORT", "8080"))
 TZ               = pytz.timezone(os.getenv("TIMEZONE", "Europe/Istanbul"))
 SUBSCRIBERS_FILE = "subscribers.json"
-VERSIYON         = "v5.4.1"
+VERSIYON         = "v5.5"
 
 subscribers: set[str] = set(c.strip() for c in CHAT_IDS_RAW.split(",") if c.strip())
 _conflict_seen   = threading.Event()
