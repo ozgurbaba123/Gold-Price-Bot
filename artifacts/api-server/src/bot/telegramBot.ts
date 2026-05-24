@@ -1,3 +1,4 @@
+// v8.3
 import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
 import { fetchGoldPrice, fetchForexRates, type GoldPrice, type ForexRate } from "./goldPrice.js";
