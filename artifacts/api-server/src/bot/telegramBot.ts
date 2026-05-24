@@ -8,7 +8,9 @@ import {
   getDueSubscribers,
   markNotified,
   subscriberCount,
+  loadSubscribers,
 } from "./subscribers.js";
+import { initSubscriberTable, loadAllFromDb } from "./subscriberDb.js";
 import { logger } from "../lib/logger.js";
 
 let bot: TelegramBot | null = null;
@@ -180,11 +182,18 @@ async function sendCurrentPrice(chatId: number): Promise<void> {
   }
 }
 
-export function initBot(): void {
+export async function initBot(): Promise<void> {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
   if (!token) {
     logger.error("TELEGRAM_BOT_TOKEN eksik — bot başlatılmıyor");
     return;
+  }
+
+  await initSubscriberTable();
+  const saved = await loadAllFromDb();
+  if (saved.length > 0) {
+    loadSubscribers(saved);
+    logger.info({ count: saved.length }, "Aboneler DB'den yüklendi");
   }
 
   bot = new TelegramBot(token, { polling: true });
