@@ -437,24 +437,31 @@ export async function initBot(): Promise<void> {
   bot.onText(/\/durum/, async (msg) => {
     const chatId = msg.chat.id;
     const sub = getSubscriber(chatId);
+    const total = subscriberCount();
     if (sub) {
       const label = INTERVALS[String(sub.intervalMinutes)]?.label ?? `${sub.intervalMinutes} dakika`;
-      const last = sub.lastNotified
-        ? sub.lastNotified.toLocaleTimeString("tr-TR", { timeZone: "Europe/Istanbul", hour: "2-digit", minute: "2-digit" })
-        : "Henüz gönderilmedi";
+      const toTR = (d: Date) =>
+        d.toLocaleTimeString("tr-TR", { timeZone: "Europe/Istanbul", hour: "2-digit", minute: "2-digit" });
+      const last = sub.lastNotified ? toTR(sub.lastNotified) : null;
+      const nextDate = sub.lastNotified
+        ? new Date(sub.lastNotified.getTime() + sub.intervalMinutes * 60 * 1000)
+        : new Date();
+      const next = toTR(nextDate);
       await bot!.sendMessage(
         chatId,
         `📊 *Abonelik Durumunuz*\n\n` +
-        `✅ Durum: Aktif\n` +
+        `✅ Durum: *Aktif*\n` +
         `⏰ Sıklık: *${label}*\n` +
-        `📨 Son bildirim: ${last}\n\n` +
+        `📨 Son bildirim: *${last ?? "Henüz gönderilmedi"}*\n` +
+        `🔜 Sonraki bildirim: *${next}* civarı\n\n` +
+        `👥 Toplam abone: *${total}*\n\n` +
         `Değiştirmek için /abone yazın.\nDudurmak için /iptal yazın.`,
         { parse_mode: "Markdown" }
       );
     } else {
       await bot!.sendMessage(
         chatId,
-        `❌ *Aboneliğiniz yok.*\n\nBildirim almak için /abone yazın.`,
+        `❌ *Aboneliğiniz yok.*\n\n👥 Şu an toplam *${total}* abone var.\n\nBildirim almak için /abone yazın.`,
         { parse_mode: "Markdown" }
       );
     }
