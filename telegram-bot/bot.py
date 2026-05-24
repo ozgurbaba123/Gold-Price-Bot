@@ -25,7 +25,7 @@ PORT             = int(os.getenv("PORT", "8080"))
 SUBSCRIBERS_FILE = "subscribers.json"
 
 TZ       = pytz.timezone(TIMEZONE)
-VERSIYON = "v4.8"
+VERSIYON = "v4.9"
 
 subscribers: set[str] = set(
     cid.strip() for cid in CHAT_IDS_RAW.split(",") if cid.strip()
@@ -118,8 +118,9 @@ def get_prices_yedek() -> dict:
     data = resp.json()
 
     def item(key):
-        alis  = parse_price(data[key]["Al\u0131\u015f"])
-        satis = parse_price(data[key]["Sat\u0131\u015f"])
+        obj = data[key]
+        alis  = parse_price(next(v for k, v in obj.items() if k.startswith('Al')))
+        satis = parse_price(next(v for k, v in obj.items() if k.startswith('Sa')))
         return make_item(alis, satis)
 
     gram    = item("gram-altin")
